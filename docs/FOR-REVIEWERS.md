@@ -52,6 +52,8 @@ The demo-app integration itself,
 [pollar-apps#30](https://github.com/pollar-xyz/pollar-apps/pull/30), was
 **merged by Pollar's own maintainer on 31 Aug 2026** (`bb277f6a`).
 
+**Another real integration, publicly thanked by the protocol, not just a logo.** [Trustless-Work/agentic-escrow-research](https://github.com/Trustless-Work/agentic-escrow-research): 4 PRs merged on 21-sep-2026 ([#1](https://github.com/Trustless-Work/agentic-escrow-research/pull/1), [#2](https://github.com/Trustless-Work/agentic-escrow-research/pull/2), [#3](https://github.com/Trustless-Work/agentic-escrow-research/pull/3), [#4](https://github.com/Trustless-Work/agentic-escrow-research/pull/4)), thanked by name by Trustless Work's official account.
+
 ## 4. Upstream contributions — bugs fixed in code we don't control
 
 The strongest kind of evidence: a maintainer with no reason to agree if it
