@@ -62,6 +62,9 @@ weren't real, agreeing.
 | [stellar/stellar-dev-skill#96](https://github.com/stellar/stellar-dev-skill/pull/96) | Nirium listed in Stellar's own official developer-skills catalog | **Merged** 15 Aug 2026, reviewed by SDF DevRel |
 | [stellar/stellar-dev-skill#97](https://github.com/stellar/stellar-dev-skill/pull/97) | Multiple real production-hardening fixes to the agentic-payments skill (x402/MPP) | **Merged** 5 Sep 2026 |
 | [x402-foundation/x402#3171](https://github.com/x402-foundation/x402/issues/3171) | Filed by us against `@x402/core`'s reference implementation; fixed by an unrelated third-party contributor, not us | **Closed** 17 Aug 2026 — external confirmation, not self-reported |
+| [stellar/js-stellar-sdk#1655](https://github.com/stellar/js-stellar-sdk/issues/1655) + 4 more | Delegate-signing path (CAP-71) wasn't seeing signers outside the root node, 5 related issues | **Closed** 28 Sep 2026 via the maintainer's own PR #1747 |
+| [Trustless-Work/trustlesswork-sdk-react#6](https://github.com/Trustless-Work/trustlesswork-sdk-react/issues/6) | SAC vs. classic-issuer ambiguity in docs | **Closed** 28 Sep 2026 |
+| [OpenZeppelin/stellar-contracts#865](https://github.com/OpenZeppelin/stellar-contracts/issues/865) | Protocol 28 | **Closed**, confirmed |
 | [OpenZeppelin/stellar-contracts#844](https://github.com/OpenZeppelin/stellar-contracts/pull/844) | Proposed fix for a `fee-abstraction` expiration-check bug we filed (#840) | **Closed** — after review the maintainer treated the Lazy-mode value as intended behavior, not a bug; our reading, corrected by theirs |
 
 ## 5. GrantFox — the real numbers, not the flattering summary
@@ -91,4 +94,4 @@ open to re-litigate.
 
 *Every number and link on this page was checked live against its source
 (Horizon, GitHub's API, the running API itself) before being written down
-— not copied from an internal doc or an earlier draft. Last verified: 9 Sep 2026.*
+— not copied from an internal doc or an earlier draft. Last verified: 28 Sep 2026.*

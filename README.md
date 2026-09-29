@@ -112,6 +112,10 @@ Real bugs found in code we don't control, in other people's repos, confirmed by 
 
 **[stellar/stellar-mpp-sdk#69](https://github.com/stellar/stellar-mpp-sdk/pull/69)** — `@stellar/mpp`'s exported `USDC_SAC_MAINNET` (54 chars) and `XLM_SAC_MAINNET` (55 chars) both fail `StrKey.isValidEd25519PublicKey()` — invalid addresses, present in every version including 0.7.1. Filed with the exact byte counts and correct addresses; PR merged the **same day**. Our own `USDC_SAC_OVERRIDE` workaround (`middleware/mpp.ts`) stays until a release actually ships the fix.
 
+**[stellar/js-stellar-sdk#1655](https://github.com/stellar/js-stellar-sdk/issues/1655)** (and the related [#1681](https://github.com/stellar/js-stellar-sdk/issues/1681), [#1683](https://github.com/stellar/js-stellar-sdk/issues/1683), [#1699](https://github.com/stellar/js-stellar-sdk/issues/1699), [#1700](https://github.com/stellar/js-stellar-sdk/issues/1700)) — five real bugs in the SDK's delegate-signing path (`needsNonInvokerSigningBy()`/`signAuthEntries()`/`authorizeEntry()` weren't walking CAP-71 delegate trees correctly, or verifying signers other than the root node). All five confirmed and fixed by the maintainer in [PR #1747](https://github.com/stellar/js-stellar-sdk/pull/1747) and [PR #1742](https://github.com/stellar/js-stellar-sdk/pull/1742), merged 28-sep and 24-sep 2026. The maintainer kept building directly on our fix in their own follow-up ([#1759](https://github.com/stellar/js-stellar-sdk/issues/1759)).
+
+**[Trustless-Work/trustlesswork-sdk-react#6](https://github.com/Trustless-Work/trustlesswork-sdk-react/issues/6)** — `trustline.address` ambiguity (SAC contract id vs. classic issuer) in their Multi-Release docs. Closed 28-sep-2026, 30 minutes after their ["Feature/version 2" PR](https://github.com/Trustless-Work/trustlesswork-sdk-react/pull/7) merged.
+
 Full history, including findings still open, in the [devlog](./docs/devlog.md).
 
 ## Contributing
