@@ -64,11 +64,24 @@ weren't real, agreeing.
 | [stellar/stellar-dev-skill#96](https://github.com/stellar/stellar-dev-skill/pull/96) | Nirium listed in Stellar's own official developer-skills catalog | **Merged** 15 Aug 2026, reviewed by SDF DevRel |
 | [stellar/stellar-dev-skill#97](https://github.com/stellar/stellar-dev-skill/pull/97) | Multiple real production-hardening fixes to the agentic-payments skill (x402/MPP) | **Merged** 5 Sep 2026 |
 | [x402-foundation/x402#3171](https://github.com/x402-foundation/x402/issues/3171) | Filed by us against `@x402/core`'s reference implementation; fixed by an unrelated third-party contributor, not us | **Closed** 17 Aug 2026 — external confirmation, not self-reported |
-| [stellar/js-stellar-sdk#1655](https://github.com/stellar/js-stellar-sdk/issues/1655) + 3 more | Delegate-signing path (CAP-71) wasn't seeing signers outside the root node, 4 related issues fixed | **Closed** 28 Sep 2026 via the maintainer's own PR #1747 |
-| [stellar/js-stellar-sdk#1699](https://github.com/stellar/js-stellar-sdk/issues/1699) | Same round, a 5th report — withdrawn by us after our own fix attempt showed it wasn't a bug | **Closed** `not_planned`, self-retracted |
+| [stellar/js-stellar-sdk#1655](https://github.com/stellar/js-stellar-sdk/issues/1655) | Delegate-signing path (CAP-71) wasn't seeing signers outside the root node | **Closed** 28 Sep 2026 via maintainer's [PR #1747](https://github.com/stellar/js-stellar-sdk/pull/1747) |
+| [stellar/js-stellar-sdk#1683](https://github.com/stellar/js-stellar-sdk/issues/1683) | `authorizeEntry`'s bare-signature fallback ignored `forAddress` | **Closed** 24 Sep 2026 via maintainer's [PR #1742](https://github.com/stellar/js-stellar-sdk/pull/1742) |
+| [stellar/js-stellar-sdk#1681](https://github.com/stellar/js-stellar-sdk/issues/1681) | `signAuthEntries` couldn't represent a non-master-key signer for a plain Address credential | **Closed** 26 Sep 2026 — fixed by maintainer's [PR #1743](https://github.com/stellar/js-stellar-sdk/pull/1743) + [#1744](https://github.com/stellar/js-stellar-sdk/pull/1744), closed by us after confirming both merged |
+| [stellar/js-stellar-sdk#1700](https://github.com/stellar/js-stellar-sdk/issues/1700) | `needsNonInvokerSigningBy` invisible for custom accounts beyond CAP-71 delegates | **Closed** 25 Sep 2026 — [PR #1745](https://github.com/stellar/js-stellar-sdk/pull/1745) documents the gap as a known limitation; not a code fix |
+| [stellar/js-stellar-sdk#1699](https://github.com/stellar/js-stellar-sdk/issues/1699) | Same round, a 5th report — withdrawn by us after our own fix attempt showed it wasn't a bug | **Closed** `not_planned`, self-retracted, never fixed |
 | [Trustless-Work/trustlesswork-sdk-react#6](https://github.com/Trustless-Work/trustlesswork-sdk-react/issues/6) | SAC vs. classic-issuer ambiguity in docs | **Closed** 28 Sep 2026 |
 | [OpenZeppelin/stellar-contracts#865](https://github.com/OpenZeppelin/stellar-contracts/issues/865) | Protocol 28 | **Closed**, confirmed |
 | [OpenZeppelin/stellar-contracts#844](https://github.com/OpenZeppelin/stellar-contracts/pull/844) | Proposed fix for a `fee-abstraction` expiration-check bug we filed (#840) | **Closed** — after review the maintainer treated the Lazy-mode value as intended behavior, not a bug; our reading, corrected by theirs |
+
+**Update, 2026-09-28 (checked against the GitHub API that day):** the four
+`js-stellar-sdk` rows above replace a single earlier row that grouped all
+five issues (including #1699) under "closed via the maintainer's own PR
+#1747" — inaccurate on two counts, caught by re-checking each issue's
+closing event individually rather than trusting the grouped claim. Only
+#1655 closed via #1747; #1683 via a separate PR (#1742); #1681 via two
+more PRs (#1743, #1744) that we closed manually after confirming; #1700
+via a docs-only PR (#1745) with no behavior change; and #1699 was never
+fixed at all — withdrawn `not_planned`.
 
 ## 5. GrantFox — the real numbers, not the flattering summary
 
@@ -86,12 +99,14 @@ closed with no deliverable at all, reported honestly rather than omitted.**
 Verify the raw numbers yourself:
 
 ```bash
-gh issue list --repo nirium-protocol/nirium-sdk --label "GrantFox OSS" --state all --json number | jq length
+gh issue list --repo nirium-protocol/nirium --label "GrantFox OSS" --state all --limit 200 --json number | jq length
 ```
 
-Board is fully closed — `gh issue list --repo nirium-protocol/nirium-sdk
---label "GrantFox OSS" --state open` returns `[]`. Nothing stale left
-open to re-litigate.
+Board is fully closed — `gh issue list --repo nirium-protocol/nirium
+--label "GrantFox OSS" --state open --limit 200` returns `[]`. Nothing
+stale left open to re-litigate. **Use `--limit 200`**: `gh issue list`
+defaults to 30 results, which silently truncates this exact count if you
+omit it — caught 2026-09-28 re-verifying this page.
 
 ---
 
