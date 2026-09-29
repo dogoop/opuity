@@ -19,7 +19,7 @@ Software-only and non-custodial: regulated partners execute settlement, the clie
 | MCP server | `npx nirium-mcp` | [![npm](https://img.shields.io/npm/v/nirium-mcp)](https://www.npmjs.com/package/nirium-mcp) | 25 tools for Claude Desktop, Cursor, and any MCP-compatible IDE. |
 | CLI | `npm install -g nirium-cli` | [![npm](https://img.shields.io/npm/v/nirium-cli)](https://www.npmjs.com/package/nirium-cli) | Scaffold and interact with Nirium from the terminal. |
 
-> The source in `packages/` matches what is published. The two SDKs have identical **client** surfaces; TypeScript is one minor ahead because `x402Serve()` is Express middleware: server-side Node, with no meaningful Python equivalent. That gap is the honest signal, not a lag.
+> The source in `packages/` matches what is published. The two SDKs share full Treasury parity (12 methods, `proposeTreasuryRebalance()`/`propose_treasury_rebalance()` included). `x402Serve()` stays TypeScript-only — it's Express middleware, server-side Node, with no meaningful equivalent in an async Python client. Going the other way, Python ships a resilient, auto-reconnecting WebSocket client (backoff, jitter, dedup) and a LangChain `BaseTool` (`pip install nirium[langchain]`) that TypeScript doesn't have yet — the version gap runs both directions, not just one.
 
 Signing with a social-login wallet instead of a raw keypair? See [`nirium-pollar-adapter`](https://github.com/nirium-protocol/nirium-pollar-adapter), a separate package that adapts [Pollar](https://pollar.xyz)'s embedded-wallet SDK to sign x402 payments and audit records through this SDK.
 
@@ -58,7 +58,7 @@ Any AI agent can now pay for your endpoint in USDC: no account, no card, no subs
 > [issue #91](https://github.com/nirium-protocol/nirium/issues/91) for what's
 > missing and why, and for a real production reference implementation).
 
-See [`docs/`](./docs) for full quickstarts, including [**"Charge AI agents in 5 minutes"**](./docs/quickstart-x402.md), and [`examples/`](./examples) for runnable Express, Next.js, [LangChain x402](./examples/langchain-x402-agent), and [non-custodial treasury vault](./examples/treasury-vault-quickstart) integrations. For real production findings (not marketing copy), see the [**devlog**](./docs/devlog.md).
+See [`docs/`](./docs) for full quickstarts, including [**"Charge AI agents in 5 minutes"**](./docs/quickstart-x402.md), and [`examples/`](./examples) for 12 runnable integrations across 4 languages: [Express](./examples/express-x402) and [Next.js](./examples/nextjs-x402) (TypeScript), [Go](./examples/go-x402), [Rust](./examples/rust-x402), [LangChain x402](./examples/langchain-x402-agent), [non-custodial treasury vault](./examples/treasury-vault-quickstart), [resilient WebSocket signals](./examples/ws-signals-resilient), [one-click Vercel deploy](./examples/deploy-x402-vercel), [Unity/C# game paywall](./examples/unity-game-x402-gate), [RouteDock discovery manifest](./examples/routedock-manifest), [Stellar Disbursement Platform audit bridge](./examples/sdp-audit-bridge), and [audit-forensic-bridge](./examples/audit-forensic-bridge). For real production findings (not marketing copy), see the [**devlog**](./docs/devlog.md).
 
 ## Networks
 
@@ -121,6 +121,10 @@ Real bugs found in code we don't control, in other people's repos, confirmed by 
 **[Trustless-Work/trustlesswork-sdk-react#6](https://github.com/Trustless-Work/trustlesswork-sdk-react/issues/6)** — `trustline.address` ambiguity (SAC contract id vs. classic issuer) in their Multi-Release docs. Closed 28-sep-2026, 30 minutes after their ["Feature/version 2" PR](https://github.com/Trustless-Work/trustlesswork-sdk-react/pull/7) merged.
 
 Full history, including findings still open, in the [devlog](./docs/devlog.md).
+
+## Funding
+
+Nirium received Stellar Community Fund Instaward funding (two awards) via a regional Stellar Ambassador chapter, with full KYC complete (Airtable + Persona + W-8BEN). Instaward is SCF's early-stage program for prototyping and local validation, up to $15,000 per project. More info: [communityfund.stellar.org](https://communityfund.stellar.org). This isn't independently verifiable by API the way the findings above are — it's the program's own award record, not a third-party confirmation.
 
 ## Contributing
 

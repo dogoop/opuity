@@ -222,7 +222,7 @@ network mismatch, failed transactions, exact arithmetic, duplicate hashes,
 mixed assets, multi-transfer SAC payments, muxed recipients, the 8 KiB cap,
 content tampering,
 forged signatures and the statement-substitution regression fixed by Nirium
-[PR #60](https://github.com/nirium-protocol/nirium-sdk/pull/60).
+[PR #60](https://github.com/nirium-protocol/nirium/pull/60).
 
 ## Official technical references
 

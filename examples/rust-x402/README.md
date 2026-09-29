@@ -2,7 +2,7 @@
 
 Minimal Rust client for the **x402 v2** payment flow on **Stellar/Soroban**. Parses `payment-required` (402) challenges, signs a real Soroban `transfer` auth entry via ed25519, and retries with a `PAYMENT-SIGNATURE` credential.
 
-Part of the [nirium-sdk](https://github.com/nirium-protocol/nirium-sdk) toolkit — the Rust surface parallel to the Go (#55) and TypeScript SDKs.
+Part of the [nirium](https://github.com/nirium-protocol/nirium) toolkit — the Rust surface parallel to the Go (#55) and TypeScript SDKs.
 
 ## Flow
 
@@ -86,7 +86,7 @@ tests/
 
 ## References
 
-- x402 spec: <https://github.com/nirium-protocol/nirium-sdk/blob/main/README.md>
+- x402 spec: <https://github.com/nirium-protocol/nirium/blob/main/README.md>
 - x402 v2 facilitator: <https://channels.openzeppelin.com/x402/testnet>
 - USDC SAC (testnet): `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`
 - Dev docs: <https://nirium.xyz/developers>

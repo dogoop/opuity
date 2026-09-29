@@ -1,6 +1,6 @@
 # x402-Protected API Template (Deploy to Vercel)
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fnirium-protocol%2Fnirium-sdk%2Ftree%2Fmain%2Fexamples%2Fdeploy-x402-vercel&env=PAY_TO,NETWORK&envDescription=Stellar%20public%20key%20(G...)%20to%20receive%20payments%20and%20network&envLink=https%3A%2F%2Fnirium.xyz%2Fdocs)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fnirium-protocol%2Fnirium%2Ftree%2Fmain%2Fexamples%2Fdeploy-x402-vercel&env=PAY_TO,NETWORK&envDescription=Stellar%20public%20key%20(G...)%20to%20receive%20payments%20and%20network&envLink=https%3A%2F%2Fnirium.xyz%2Fdocs)
 
 A minimal, zero-config template for deploying pay-per-request APIs protected by the **x402 protocol** and **Nirium SDK** on Vercel.
 
