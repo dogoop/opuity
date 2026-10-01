@@ -18,6 +18,7 @@ import {
     assertValidPolicyHook, createPolicyGatedSigner, X402PolicyError,
     type X402BaseSigner, type X402PolicyHook, type X402PaymentRequirementsView,
 } from './x402-policy';
+import { captureRequirements, toSpendCapError, type X402OfferedRequirement } from './x402-spend-cap';
 
 export interface AgentConfig {
     apiKey: string;
@@ -583,7 +584,7 @@ export class Agent {
 
     private token: string | null = null;
 
-    private x402Client: { fetch: typeof fetch } | null = null;
+    private x402Client: { client: any; scheme: any; baseFetch: typeof fetch } | null = null;
     private x402Policy: { base: X402BaseSigner; rpcUrl: string; policy: X402PolicyHook } | null = null;
     private mppClient: { fetch: typeof fetch } | null = null;
 
@@ -1190,24 +1191,34 @@ export class Agent {
             return;
         }
         this.x402Policy = null;
-        const client = new (X402ClientClass as any)().register(
-            'stellar:*',
-            new (ExactStellarScheme as any)(signer, { url: rpcUrl })
-        );
-        this.x402Client = { fetch: wrapFetchWithPayment(fetch, client) } as any;
+        const scheme = new (ExactStellarScheme as any)(signer, { url: rpcUrl });
+        const client = new (X402ClientClass as any)().register('stellar:*', scheme);
+        // El cliente es uno solo; el fetch envuelto se arma en cada llamada
+        // (un closure barato) para que lo capturado de cada 402 sea de esa llamada.
+        this.x402Client = { client, scheme, baseFetch: fetch };
     }
 
     /**
      * Fetch a paid resource via x402 protocol.
      * The client automatically handles 402 negotiation, auth-entry signing, and payment.
      * Returns the Response object — call .json() or .text() for the payload.
+     *
+     * Throws `X402SpendCapError` when @x402/core refuses a payment for being above
+     * its per-payment cap (before anything is signed), and `X402PolicyError` when
+     * a `policy` refuses it.
      */
     async x402Fetch(url: string, init?: RequestInit): Promise<Response> {
         if (this.x402Policy) return this.x402FetchWithPolicy(this.x402Policy, url, init);
         if (!this.x402Client) {
             throw new Error('x402 client not initialized. Call agent.initX402() first.');
         }
-        return this.x402Client.fetch(url, init);
+        const { client, scheme, baseFetch } = this.x402Client;
+        const sink: { offered?: X402OfferedRequirement[] } = {};
+        try {
+            return await wrapFetchWithPayment(captureRequirements(baseFetch, sink), client)(url, init);
+        } catch (e) {
+            throw toSpendCapError(e, url, sink.offered, scheme.findDefaultAsset?.bind(scheme)) ?? e;
+        }
     }
 
     private async x402FetchWithPolicy(
@@ -1220,8 +1231,10 @@ export class Agent {
             () => ({ url, method: (init?.method ?? 'GET').toUpperCase(), requirements: slot.requirements }),
             (err) => { slot.error = err; },
         );
+        const scheme = new (ExactStellarScheme as any)(gated, { url: cfg.rpcUrl });
+        const sink: { offered?: X402OfferedRequirement[] } = {};
         const client = new (X402ClientClass as any)()
-            .register('stellar:*', new (ExactStellarScheme as any)(gated, { url: cfg.rpcUrl }))
+            .register('stellar:*', scheme)
             .onBeforePaymentCreation(async ({ selectedRequirements: r }: any) => {
                 slot.requirements = {
                     scheme: r.scheme, network: r.network, asset: r.asset,
@@ -1231,10 +1244,10 @@ export class Agent {
         // NUNCA registrar onPaymentCreationFailure aquí: puede devolver un
         // payload sin pasar por el signer, y el gate quedaría puenteado.
         try {
-            return await wrapFetchWithPayment(globalThis.fetch, client)(url, init);
+            return await wrapFetchWithPayment(captureRequirements(globalThis.fetch, sink), client)(url, init);
         } catch (e) {
             // @x402/fetch reenvuelve el error y pierde la clase.
-            throw slot.error ?? e;
+            throw slot.error ?? toSpendCapError(e, url, sink.offered, scheme.findDefaultAsset?.bind(scheme)) ?? e;
         }
     }
 
@@ -1592,6 +1605,7 @@ export function x402Serve(config: X402ServeConfig): any {
 // ESNext` emits these specifiers verbatim, and Node's native ESM resolver
 // (unlike a bundler) needs the real extension to find the compiled file.
 export { X402PolicyError } from './x402-policy';
+export { X402SpendCapError } from './x402-spend-cap';
 export type {
     X402PolicyHook, X402PolicyContext, X402PolicyDecision, X402PolicyVerdict,
     X402PolicyOutcome, X402PolicyRecord, X402PaymentRequirementsView,

@@ -93,6 +93,24 @@ const response = await agent.x402Fetch('https://nirium-agent.fly.dev/api/v1/prem
 const data = await response.json();
 ```
 
+#### Per-payment cap
+
+`@x402/core` 2.23.0 and later refuse any payment above a default cap of **$1** per request (a default asset such as USDC), before anything is signed. `x402Fetch()` now says so with an `X402SpendCapError` instead of a generic error:
+
+```typescript
+import { X402SpendCapError } from 'nirium';
+
+try {
+  await agent.x402Fetch(url);
+} catch (e) {
+  if (e instanceof X402SpendCapError) {
+    console.log(e.formattedAmount, e.cap, e.signerCalled); // '2 USDC' '$1' false
+  }
+}
+```
+
+The error carries `url`, `amount` (atomic units, the cheapest offer when the server lists several), `formattedAmount`, `asset`, `network` and `cap`, and `signerCalled` is always `false`: nothing was signed or sent. The cap is enforced by `@x402/core` and cannot be changed from `initX402()` yet. Other `spendControls` rejections (for example a non-default asset) still surface as the original error.
+
 #### Pre-sign policy hook
 
 Pass `policy` to `initX402()` and every `x402Fetch()` asks your policy before anything is signed. The question is asked after the Stellar authorization is built, so the policy sees exactly what would be signed: amount, destination, asset, nonce, expiration ledger and network, decoded from the bytes.
