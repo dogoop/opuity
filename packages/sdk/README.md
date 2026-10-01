@@ -272,7 +272,7 @@ Anchor a **hash** rather than the data itself: IPFS content cannot be deleted, s
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 22 (required by `@stellar/stellar-sdk` 16 and `@x402/stellar` 2.28, both declare `engines.node >=22.0.0`)
 - TypeScript >= 5.0
 
 ## Links
