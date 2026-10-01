@@ -12,7 +12,10 @@ import { x402Client as X402ClientClass, wrapFetchWithPayment } from '@x402/fetch
 import { createEd25519Signer } from '@x402/stellar';
 // @ts-ignore
 import { ExactStellarScheme } from '@x402/stellar/exact/client';
-import * as MppxModule from 'mppx';
+// @ts-ignore — ESM subpath imports (mismo patrón que los de @x402 de arriba)
+import { Mppx as MppxClient } from 'mppx/client';
+// @ts-ignore
+import { stellar as mppStellar } from '@stellar/mpp/charge/client';
 import { checkReplay, checkRateLimit, type X402GuardConfig } from './x402-guard';
 import {
     assertValidPolicyHook, createPolicyGatedSigner, X402PolicyError,
@@ -1265,17 +1268,14 @@ export class Agent {
      * ```
      */
     initMpp(config: MppConfig): void {
-        const Mppx = (MppxModule as any).default || MppxModule;
-        const mppx = Mppx.create({
-            stellar: {
-                charge: {
-                    secretKey: config.secretKey,
-                    network: config.network || 'stellar:testnet',
-                    mode: config.mode || 'pull',
-                },
-            },
+        // La red la dicta el reto 402 del servidor (methodDetails.network), no el cliente:
+        // `config.network` se acepta por compatibilidad pero ya no se usa.
+        // polyfill:false es obligatorio: sin él mppx reemplaza globalThis.fetch y
+        // pasaría a interceptar también los 402 de x402Fetch.
+        this.mppClient = MppxClient.create({
+            methods: [mppStellar.charge({ secretKey: config.secretKey, mode: config.mode || 'pull' })],
+            polyfill: false,
         });
-        this.mppClient = mppx;
     }
 
     /**
