@@ -12,7 +12,7 @@ All notable changes to the `nirium` package are documented here.
 
 ### Fixed
 
-- `initMpp()` threw `TypeError: Mppx.create is not a function` in 0.15.0: it called the wrong export of `mppx` with a configuration the library does not take. It now builds the client the way `mppx` and `@stellar/mpp` document (`Mppx` from `mppx/client`, `stellar.charge()` from `@stellar/mpp/charge/client`) with `polyfill: false`, so it never replaces `globalThis.fetch` (which would also have intercepted the 402s of `x402Fetch`). `MppConfig.network` is still accepted but no longer used: the network comes from the server's challenge. Checked against the agent's own MPP middleware on testnet in `pull` and `push` mode. MPP Charge is still **not** verified end to end against Nirium's hosted endpoints, which currently reject the payment; see the README.
+- `initMpp()` threw `TypeError: Mppx.create is not a function` in 0.15.0: it called the wrong export of `mppx` with a configuration the library does not take. It now builds the client the way `mppx` and `@stellar/mpp` document (`Mppx` from `mppx/client`, `stellar.charge()` from `@stellar/mpp/charge/client`) with `polyfill: false`, so it never replaces `globalThis.fetch` (which would also have intercepted the 402s of `x402Fetch`). `MppConfig.network` is still accepted but no longer used: the network comes from the server's challenge. Checked against the agent's own MPP middleware on testnet in `pull` and `push` mode. MPP Charge is still **not** verified end to end against Nirium's hosted endpoints: the testnet one rejected the payment when tested on 2026-10-01, and the mainnet one was not tested; see the README.
 
 ### Changed
 

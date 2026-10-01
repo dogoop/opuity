@@ -1261,10 +1261,10 @@ export class Agent {
      * Uses canonical @stellar/mpp charge mode with mppx.
      *
      * EXPERIMENTAL. The client works against a compliant MPP Charge server, but
-     * Nirium's hosted `/api/v1/mpp/*` endpoints currently reject MPP payments
-     * (`402 Verification Failed`), and in `push` mode the payment has already
-     * settled on-chain when that happens. Use `initX402()` for paid endpoints
-     * until this is resolved. See the README.
+     * Nirium's hosted testnet `/api/v1/mpp/*` endpoint rejected MPP payments when
+     * tested on 2026-10-01 (`402 Verification Failed`), and in `push` mode the
+     * payment has already settled on-chain when that happens. The mainnet
+     * endpoint was not tested. Use `initX402()` for paid endpoints. See the README.
      * In pull mode, the server assembles and broadcasts the transaction.
      *
      * @example

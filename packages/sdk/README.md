@@ -165,7 +165,7 @@ const response = await agent.mppFetch('https://your-mpp-server.example/resource'
 **Do not use it in production, and do not point it at Nirium's hosted endpoints yet.**
 
 - The client works against a compliant MPP Charge server. We checked it against Nirium's own MPP middleware running locally against testnet, in `pull` and in `push` mode.
-- Nirium's hosted `/api/v1/mpp/*` endpoints currently reject MPP payments with `402 Verification Failed`, in `pull` and in `push` mode. We reproduced this on the testnet endpoint; we have not tested the mainnet one and you should expect the same. We have not found the cause yet.
+- When we tested on 1 October 2026, Nirium's hosted **testnet** endpoint (`/api/v1/mpp/*`) rejected MPP payments with `402 Verification Failed`, in `pull` and in `push` mode. We have **not tested the mainnet endpoint** (it would spend real USDC), so we cannot tell you it works there. We have not found the cause yet.
 - In `push` mode the payment settles on-chain before the server verifies it, so a request the server rejects is **not refunded**.
 - Until this is diagnosed, use x402 (`initX402()`) for paid endpoints. The `get_mpp_*` tools of the MCP server have the same limitation.
 
@@ -199,7 +199,7 @@ Runs on **your own server**, not Nirium's — `x402Serve()` is a client-side fun
 | **Protected** (API key) | `execute`, `market`, `loop/start\|stop\|scan`, `subscriptions`, `skills/install`, `webhooks` |
 | **WebSocket** (JWT) | `/ws/signals` — real-time signal stream |
 | **x402 Premium** | `/api/v1/premium/signals` ($0.02 USDC), `/api/v1/premium/market` ($0.05 USDC) |
-| **MPP Charge** | `/api/v1/mpp/signals`, `/api/v1/mpp/market` (hosted endpoints currently reject MPP payments, see [MPP Charge](#mpp-charge-experimental)) |
+| **MPP Charge** | `/api/v1/mpp/signals`, `/api/v1/mpp/market` (testnet endpoint rejected MPP payments when tested, mainnet untested, see [MPP Charge](#mpp-charge-experimental)) |
 
 ### x402 Metrics — Observability Wrapper
 
