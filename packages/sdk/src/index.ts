@@ -14,6 +14,10 @@ import { createEd25519Signer } from '@x402/stellar';
 import { ExactStellarScheme } from '@x402/stellar/exact/client';
 import * as MppxModule from 'mppx';
 import { checkReplay, checkRateLimit, type X402GuardConfig } from './x402-guard';
+import {
+    assertValidPolicyHook, createPolicyGatedSigner, X402PolicyError,
+    type X402BaseSigner, type X402PolicyHook, type X402PaymentRequirementsView,
+} from './x402-policy';
 
 export interface AgentConfig {
     apiKey: string;
@@ -27,6 +31,10 @@ export interface AgentConfig {
  * SEP-43 signer. Only `address` and `signAuthEntry` are required — that is all
  * x402 needs, and it is what browser wallets expose (Freighter, Stellar Wallets
  * Kit, Pollar). Lets the SDK pay from a browser without ever holding a secret.
+ *
+ * Note: what `signAuthEntry` receives is the base64 `HashIdPreimage` of the
+ * Soroban authorization (the bytes whose sha256 gets signed), not the
+ * `SorobanAuthorizationEntry` itself.
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0043.md
  */
 export interface X402Signer {
@@ -54,6 +62,13 @@ export interface X402Config {
     network?: string;
     /** Soroban RPC endpoint override (defaults per network) */
     rpcUrl?: string;
+    /**
+     * Pre-sign policy hook (#96). Runs after the Stellar authorization is
+     * built and before anything is signed; only an ALLOW bound to that exact
+     * authorization, and still valid, reaches the signer. Without it,
+     * x402Fetch behaves exactly as before. See X402PolicyHook.
+     */
+    policy?: X402PolicyHook;
 }
 
 export interface MppConfig {
@@ -569,6 +584,7 @@ export class Agent {
     private token: string | null = null;
 
     private x402Client: { fetch: typeof fetch } | null = null;
+    private x402Policy: { base: X402BaseSigner; rpcUrl: string; policy: X402PolicyHook } | null = null;
     private mppClient: { fetch: typeof fetch } | null = null;
 
     constructor(config: AgentConfig) {
@@ -1157,6 +1173,7 @@ export class Agent {
                 'initX402 got both `secretKey` and `signer` — pass only one, so it is unambiguous which key signs.',
             );
         }
+        if (config.policy !== undefined) assertValidPolicyHook(config.policy);
         const signer = config.signer ?? (createEd25519Signer as any)(config.secretKey, network);
         // Pubnet: el SDF NO corre RPC público de mainnet — soroban.stellar.org no
         // existe. Default al RPC público de gateway.fm (mismo default que
@@ -1164,6 +1181,15 @@ export class Agent {
         const rpcUrl = config.rpcUrl || (network.includes('testnet')
             ? 'https://soroban-testnet.stellar.org'
             : 'https://soroban-rpc.mainnet.stellar.gateway.fm');
+        if (config.policy) {
+            // Con policy el cliente se arma en cada x402Fetch: el signer de
+            // stellar-sdk no recibe la URL, y un closure por llamada ata URL,
+            // método y requisitos a ese pago sin estado compartido.
+            this.x402Policy = { base: signer, rpcUrl, policy: config.policy };
+            this.x402Client = null;
+            return;
+        }
+        this.x402Policy = null;
         const client = new (X402ClientClass as any)().register(
             'stellar:*',
             new (ExactStellarScheme as any)(signer, { url: rpcUrl })
@@ -1177,10 +1203,39 @@ export class Agent {
      * Returns the Response object — call .json() or .text() for the payload.
      */
     async x402Fetch(url: string, init?: RequestInit): Promise<Response> {
+        if (this.x402Policy) return this.x402FetchWithPolicy(this.x402Policy, url, init);
         if (!this.x402Client) {
             throw new Error('x402 client not initialized. Call agent.initX402() first.');
         }
         return this.x402Client.fetch(url, init);
+    }
+
+    private async x402FetchWithPolicy(
+        cfg: { base: X402BaseSigner; rpcUrl: string; policy: X402PolicyHook },
+        url: string, init?: RequestInit,
+    ): Promise<Response> {
+        const slot: { requirements?: X402PaymentRequirementsView; error?: X402PolicyError } = {};
+        const gated = createPolicyGatedSigner(
+            cfg.base, cfg.policy,
+            () => ({ url, method: (init?.method ?? 'GET').toUpperCase(), requirements: slot.requirements }),
+            (err) => { slot.error = err; },
+        );
+        const client = new (X402ClientClass as any)()
+            .register('stellar:*', new (ExactStellarScheme as any)(gated, { url: cfg.rpcUrl }))
+            .onBeforePaymentCreation(async ({ selectedRequirements: r }: any) => {
+                slot.requirements = {
+                    scheme: r.scheme, network: r.network, asset: r.asset,
+                    payTo: r.payTo, amount: r.amount, maxTimeoutSeconds: r.maxTimeoutSeconds,
+                };
+            });
+        // NUNCA registrar onPaymentCreationFailure aquí: puede devolver un
+        // payload sin pasar por el signer, y el gate quedaría puenteado.
+        try {
+            return await wrapFetchWithPayment(globalThis.fetch, client)(url, init);
+        } catch (e) {
+            // @x402/fetch reenvuelve el error y pierde la clase.
+            throw slot.error ?? e;
+        }
     }
 
     // ─── MPP Protocol (Charge Mode) ────────────────────────────
@@ -1536,6 +1591,11 @@ export function x402Serve(config: X402ServeConfig): any {
 // `.js` extension required even though the source is `.ts`: `module:
 // ESNext` emits these specifiers verbatim, and Node's native ESM resolver
 // (unlike a bundler) needs the real extension to find the compiled file.
+export { X402PolicyError } from './x402-policy';
+export type {
+    X402PolicyHook, X402PolicyContext, X402PolicyDecision, X402PolicyVerdict,
+    X402PolicyOutcome, X402PolicyRecord, X402PaymentRequirementsView,
+} from './x402-policy';
 export { x402Metrics } from './metrics';
 export type { X402MetricsResult, MetricsSnapshot } from './metrics';
 export type { X402GuardStore, X402GuardConfig, GuardRequest, GuardDenied } from './x402-guard';

@@ -93,6 +93,45 @@ const response = await agent.x402Fetch('https://nirium-agent.fly.dev/api/v1/prem
 const data = await response.json();
 ```
 
+#### Pre-sign policy hook
+
+Pass `policy` to `initX402()` and every `x402Fetch()` asks your policy before anything is signed. The question is asked after the Stellar authorization is built, so the policy sees exactly what would be signed: amount, destination, asset, nonce, expiration ledger and network, decoded from the bytes.
+
+```typescript
+import { X402PolicyError } from 'nirium';
+
+agent.initX402({
+  signer: walletSigner,
+  network: 'stellar:pubnet',
+  policy: {
+    evaluate: async (ctx) => {
+      const ok = BigInt(ctx.authorization.amount) <= myLimit;
+      return ok
+        ? { decision: 'ALLOW', contextHash: ctx.contextHash, policyVersion: 'v7', expiresAt: Date.now() + 2_000 }
+        : { decision: 'DENY', reason: 'over limit' };
+    },
+    // Optional: the policy version in force right now.
+    currentVersion: async () => myPolicyStore.version(),
+  },
+});
+
+try {
+  await agent.x402Fetch(url);
+} catch (e) {
+  if (e instanceof X402PolicyError) console.log(e.outcome); // DENY, WAIT, TIMEOUT, STALE, ...
+}
+```
+
+Only an `ALLOW` that echoes this authorization's `contextHash`, and is still valid, reaches the signer. Everything else signs nothing: `DENY`, `WAIT`, an exception, no answer before the deadline (`timeoutMs`, default 5 s, never more than half the payment's `maxTimeoutSeconds`), a malformed answer, an `ALLOW` past its `expiresAt`, or a signer whose address changed while the policy was being asked. Without `policy`, `x402Fetch()` behaves exactly as before.
+
+**Stale ALLOW.** With `currentVersion` set, it is read after the `ALLOW` and right before signing, and the `ALLOW` signs only if its `policyVersion` matches. A rejected, empty or late read signs nothing. This check is **not atomic with signing**: the version can change after it is read, or while the signer runs. It narrows the window to the synchronous step between the read and the signer call; it does not close it. `expiresAt` is checked again after the read.
+
+**Rejected before the policy is consulted.** An authorization that is not a single `transfer(from, to, amount)` matching the selected payment requirements (asset, destination, amount, network, no sub-invocations, `from` equal to the signer) is refused without calling `evaluate`. A CAP-71 preimage must be bound to the signer's own address.
+
+**Signature check.** The hook does not inspect the signature the signer returns. That check comes from `@stellar/stellar-sdk`: `authorizeEntry` verifies the signature against sha256 of the preimage before it enters the transaction (verified in 16.3.0, the version this package requires). A signature over different bytes, or by a different key, never reaches the merchant; a test in this package pins that.
+
+**What this does not do.** It is a check on the agent side, not account-level enforcement: code in the same process that holds the raw signer can still call it directly, and nothing on-chain enforces the policy. It does not reserve capacity across concurrent payments: two calls evaluated at the same time can each fit a limit that together they exceed; an aggregate cap has to be held by your policy. Discussed in [#96](https://github.com/nirium-protocol/nirium/issues/96), where @CodeDeityX laid out the agent-side cases this hook is built against.
+
 ### MPP — Session-Based Budget Delegation
 ```typescript
 agent.initMpp({

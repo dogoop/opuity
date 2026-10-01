@@ -1,0 +1,542 @@
+/**
+ * Pre-sign policy hook (#96) - unit tests against the real stellar-sdk.
+ *
+ * No RPC, no network, nothing broadcast: each test builds the auth entry that
+ * ExactStellarScheme would ask to sign and runs it through `authorizeEntry`,
+ * which is what `AssembledTransaction.signAuthEntries` calls internally (and
+ * where stellar-sdk verifies the returned signature against sha256(preimage)).
+ */
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+    Keypair, Networks, xdr, Address, nativeToScVal, authorizeEntry, hash,
+} from '@stellar/stellar-sdk';
+import {
+    createPolicyGatedSigner, effectiveTimeoutMs, X402PolicyError,
+} from '../src/x402-policy.ts';
+import type { X402PolicyHook, X402PaymentRequirementsView, X402PolicyContext } from '../src/x402-policy.ts';
+
+const payer = Keypair.random();
+const merchant = Keypair.random().publicKey();
+const USDC_TESTNET = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+const LEDGER = 1_000_000;
+
+const reqs = (over: Partial<X402PaymentRequirementsView> = {}): X402PaymentRequirementsView => ({
+    scheme: 'exact', network: 'stellar:testnet', asset: USDC_TESTNET, payTo: merchant,
+    amount: '200000', maxTimeoutSeconds: 60, ...over,
+});
+
+function invocation(opts: { amount?: string; to?: string; fn?: string; sub?: boolean }, nested = false): xdr.SorobanAuthorizedInvocation {
+    return new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+            new xdr.InvokeContractArgs({
+                contractAddress: new Address(USDC_TESTNET).toScAddress(),
+                functionName: opts.fn ?? 'transfer',
+                args: [
+                    nativeToScVal(payer.publicKey(), { type: 'address' }),
+                    nativeToScVal(opts.to ?? merchant, { type: 'address' }),
+                    nativeToScVal(opts.amount ?? '200000', { type: 'i128' }),
+                ],
+            }),
+        ),
+        subInvocations: opts.sub && !nested ? [invocation({}, true)] : [],
+    });
+}
+
+let nonceSeq = 1n;
+/** transfer(from,to,amount) auth entry, as the simulation would return it. */
+function transferEntry(opts: { amount?: string; to?: string; fn?: string; nonce?: bigint; sub?: boolean } = {}) {
+    return new xdr.SorobanAuthorizationEntry({
+        credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(new xdr.SorobanAddressCredentials({
+            address: new Address(payer.publicKey()).toScAddress(),
+            nonce: xdr.Int64.fromString(String(opts.nonce ?? nonceSeq++)),
+            signatureExpirationLedger: 0,
+            signature: xdr.ScVal.scvVoid(),
+        })),
+        rootInvocation: invocation(opts),
+    });
+}
+
+/** Instrumented base signer: counts calls and records the exact bytes. */
+function instrumentedSigner(opts: { mutate?: (preimageXdr: string) => string } = {}) {
+    const calls: string[] = [];
+    const signer = {
+        address: payer.publicKey(),
+        signAuthEntry: async (preimageXdr: string) => {
+            calls.push(preimageXdr);
+            const signed = opts.mutate ? opts.mutate(preimageXdr) : preimageXdr;
+            const pre = xdr.HashIdPreimage.fromXDR(signed, 'base64');
+            return { signedAuthEntry: payer.sign(hash(pre.toXDR())).toString('base64'), signerAddress: payer.publicKey() };
+        },
+    };
+    return { calls, signer };
+}
+
+/** What stellar-sdk 16 `signAuthEntries` does with each entry. */
+async function sign(gated: { signAuthEntry: (...a: any[]) => Promise<any> }, entry = transferEntry(), passphrase = Networks.TESTNET) {
+    return authorizeEntry(entry, async (preimage: any) => {
+        const { signedAuthEntry } = await gated.signAuthEntry(preimage.toXDR('base64'), { address: payer.publicKey() });
+        return Buffer.from(signedAuthEntry, 'base64');
+    }, LEDGER, passphrase);
+}
+
+const call = (url = 'https://api.example/paid', requirements = reqs()) => () => ({ url, method: 'GET', requirements });
+const allow = (extra = {}): X402PolicyHook['evaluate'] => async (ctx) => ({ decision: 'ALLOW', contextHash: ctx.contextHash, ...extra });
+const outcomeOf = async (p: Promise<unknown>) => {
+    try { await p; return 'SIGNED'; } catch (e) {
+        if (!(e instanceof X402PolicyError)) throw e;
+        return e.outcome;
+    }
+};
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe('decision binding (G1)', () => {
+    test('bound, current ALLOW signs once, over the evaluated bytes', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let seen: X402PolicyContext | undefined;
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => { seen = ctx; return { decision: 'ALLOW', contextHash: ctx.contextHash }; },
+        }, call());
+        const signed = await sign(gated);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0], seen!.authorization.preimageXdr);
+        assert.equal(seen!.authorization.amount, '200000');
+        assert.equal(seen!.authorization.to, merchant);
+        assert.equal(seen!.authorization.preimageType, 'legacy');
+        assert.equal(seen!.url, 'https://api.example/paid');
+        assert.equal(signed.credentials().address().signatureExpirationLedger(), LEDGER);
+    });
+
+    for (const verdict of ['DENY', 'WAIT'] as const) test(`${verdict} never reaches the signer`, async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => ({ decision: verdict, contextHash: ctx.contextHash, reason: 'x' }),
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), verdict);
+        assert.equal(calls.length, 0);
+    });
+
+    test('engine exception fails closed', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { evaluate: async () => { throw new Error('engine down'); } }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'ENGINE_ERROR');
+        assert.equal(calls.length, 0);
+    });
+
+    test('timeout: a late ALLOW produces no signature, not even afterwards', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let aborted = false;
+        const gated = createPolicyGatedSigner(signer, {
+            timeoutMs: 20,
+            evaluate: (ctx, { signal }) => new Promise((r) => {
+                signal.addEventListener('abort', () => { aborted = true; });
+                setTimeout(() => r({ decision: 'ALLOW', contextHash: ctx.contextHash }), 80);
+            }),
+        }, call());
+        const err = await sign(gated).catch((e) => e);
+        assert.ok(err instanceof X402PolicyError);
+        assert.equal(err.outcome, 'TIMEOUT');
+        assert.equal(err.message, 'x402 policy TIMEOUT: no decision within 20 ms');
+        await delay(120);
+        assert.equal(calls.length, 0);
+        assert.equal(aborted, true);
+    });
+
+    test('decision resolved but the clock is already past the deadline: no signature', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let t = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            timeoutMs: 1000, now: () => t,
+            evaluate: async (ctx) => { t = 5000; return { decision: 'ALLOW', contextHash: ctx.contextHash }; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'TIMEOUT');
+        assert.equal(calls.length, 0);
+    });
+
+    test('a decision for one auth entry does not authorize another (engine cache/replay)', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let cached: string | undefined;
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => { cached ??= ctx.contextHash; return { decision: 'ALLOW', contextHash: cached }; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated, transferEntry({ nonce: 1n }))), 'SIGNED');
+        assert.equal(await outcomeOf(sign(gated, transferEntry({ nonce: 2n }))), 'UNBOUND');
+        assert.equal(calls.length, 1);
+    });
+
+    test('ALLOW without contextHash: no signature', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { evaluate: async () => ({ decision: 'ALLOW' }) }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'UNBOUND');
+        assert.equal(calls.length, 0);
+    });
+
+    for (const [label, bad] of [
+        ['null', null], ['empty', {}], ['lowercase', { decision: 'allow' }],
+    ] as const) test(`malformed answer (${label}): no signature`, async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { evaluate: async () => bad as any }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'MALFORMED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('expiresAt that is not epoch ms: no signature', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow({ expiresAt: '2099-01-01' }) }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'MALFORMED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('the engine cannot rewrite what gets signed (frozen context)', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let original = '';
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => {
+                original = ctx.authorization.preimageXdr;
+                assert.throws(() => { (ctx.authorization as any).preimageXdr = 'AAAA'; });
+                return { decision: 'ALLOW', contextHash: ctx.contextHash };
+            },
+        }, call());
+        await sign(gated);
+        assert.equal(calls[0], original);
+    });
+
+    test('mutating the decision object after returning it cannot extend it', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let t = 1000;
+        const decision: any = {};
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => t,
+            evaluate: async (ctx) => Object.assign(decision, { decision: 'ALLOW', contextHash: ctx.contextHash, policyVersion: 'v7', expiresAt: 2000 }),
+            currentVersion: async () => { decision.expiresAt = 9999; t = 2000; return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'EXPIRED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('a throwing onDecision observer does not change the outcome', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async () => ({ decision: 'DENY' }), onDecision: () => { throw new Error('boom'); },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'DENY');
+        assert.equal(calls.length, 0);
+    });
+
+    test('concurrency: each call stays bound to its own decision', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const hashes = new Map<string, string>();
+        // Engine that tries to hand B the decision made for A.
+        const engine: X402PolicyHook['evaluate'] = async (ctx) => {
+            hashes.set(ctx.url, ctx.contextHash);
+            await delay(5);
+            return { decision: 'ALLOW', contextHash: hashes.get('https://a.example')! };
+        };
+        const a = createPolicyGatedSigner(signer, { evaluate: engine }, call('https://a.example'));
+        const b = createPolicyGatedSigner(signer, { evaluate: engine }, call('https://b.example'));
+        const out = await Promise.all([outcomeOf(sign(a)), outcomeOf(sign(b))]);
+        assert.deepEqual(out, ['SIGNED', 'UNBOUND']);
+        assert.equal(calls.length, 1);
+    });
+
+    test('fractionation: the gate obeys an aggregate cap held by the engine', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let spent = 0n;
+        const engine: X402PolicyHook['evaluate'] = async (ctx) => {
+            const amt = BigInt(ctx.authorization.amount);
+            if (spent + amt > 2000n) return { decision: 'DENY', reason: 'aggregate cap' };
+            spent += amt;
+            return { decision: 'ALLOW', contextHash: ctx.contextHash };
+        };
+        const outs: string[] = [];
+        for (let i = 0; i < 5; i++) {
+            const gated = createPolicyGatedSigner(signer, { evaluate: engine }, call('https://api.example/paid', reqs({ amount: '499' })));
+            outs.push(await outcomeOf(sign(gated, transferEntry({ amount: '499' }))));
+        }
+        assert.deepEqual(outs, ['SIGNED', 'SIGNED', 'SIGNED', 'SIGNED', 'DENY']);
+        assert.equal(calls.length, 4);
+    });
+});
+
+describe('expiry (stale ALLOW, without a version source)', () => {
+    test('expired ALLOW does not sign and keeps policyVersion on the error', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow({ policyVersion: 'v7', expiresAt: Date.now() - 1 }) }, call());
+        const err = await sign(gated).catch((e) => e);
+        assert.equal(err.outcome, 'EXPIRED');
+        assert.equal(err.decision.policyVersion, 'v7');
+        assert.equal(calls.length, 0);
+    });
+
+    test('expiresAt equal to now counts as expired', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { now: () => 2000, evaluate: allow({ expiresAt: 2000 }) }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'EXPIRED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('requireExpiry: ALLOW without expiresAt does not sign; with a future one it does', async () => {
+        const a = instrumentedSigner();
+        assert.equal(await outcomeOf(sign(createPolicyGatedSigner(a.signer, { requireExpiry: true, evaluate: allow() }, call()))), 'EXPIRED');
+        assert.equal(a.calls.length, 0);
+        const b = instrumentedSigner();
+        assert.equal(await outcomeOf(sign(createPolicyGatedSigner(b.signer, { requireExpiry: true, evaluate: allow({ expiresAt: Date.now() + 10_000 }) }, call()))), 'SIGNED');
+        assert.equal(b.calls.length, 1);
+    });
+
+    test('without currentVersion, policyVersion is opaque and not required', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow() }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNED');
+        assert.equal(calls.length, 1);
+    });
+});
+
+describe('currentVersion: stale-ALLOW check right before signing', () => {
+    const versioned = (extra = {}) => allow({ policyVersion: 'v7', ...extra });
+
+    test('ALLOW under the current version signs once, and the source is read once', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let reads = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: versioned(), currentVersion: async () => { reads++; return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNED');
+        assert.equal(reads, 1);
+        assert.equal(calls.length, 1);
+    });
+
+    test('version changed between decision and signing: STALE, zero signer calls', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let current = 'v7';
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => { const d = await versioned()(ctx, { signal: new AbortController().signal }); current = 'v8'; return d; },
+            currentVersion: async () => current,
+        }, call());
+        const err = await sign(gated).catch((e) => e);
+        assert.equal(err.outcome, 'STALE');
+        assert.equal(err.decision.policyVersion, 'v7');
+        assert.equal(calls.length, 0);
+    });
+
+    test('source rejects: VERSION_UNAVAILABLE, zero signer calls', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: versioned(), currentVersion: async () => { throw new Error('source offline'); },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'VERSION_UNAVAILABLE');
+        assert.equal(calls.length, 0);
+    });
+
+    for (const [label, value] of [['empty', ''], ['blank', '   '], ['not a string', 7]] as const) test(`source returns ${label}: VERSION_UNAVAILABLE`, async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: versioned(), currentVersion: async () => value as any,
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'VERSION_UNAVAILABLE');
+        assert.equal(calls.length, 0);
+    });
+
+    test('source never resolves: TIMEOUT within the same deadline, zero signer calls', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let aborted = false;
+        const gated = createPolicyGatedSigner(signer, {
+            timeoutMs: 20, evaluate: versioned(),
+            currentVersion: (_c, { signal }) => new Promise(() => { signal.addEventListener('abort', () => { aborted = true; }); }),
+        }, call());
+        const err = await sign(gated).catch((e) => e);
+        assert.equal(err.outcome, 'TIMEOUT');
+        assert.equal(err.message, 'x402 policy TIMEOUT: no current policy version within 20 ms');
+        assert.equal(calls.length, 0);
+        assert.equal(aborted, true);
+    });
+
+    test('ALLOW without policyVersion when a source is configured: MALFORMED, source not read', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let reads = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(), currentVersion: async () => { reads++; return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'MALFORMED');
+        assert.equal(reads, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    test('expiry is rechecked after the source is read', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let t = 1000;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => t, evaluate: versioned({ expiresAt: 2000 }),
+            currentVersion: async () => { t = 2000; return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'EXPIRED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('already-expired ALLOW is refused before the source is read', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let reads = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => 3000, evaluate: versioned({ expiresAt: 2000 }),
+            currentVersion: async () => { reads++; return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'EXPIRED');
+        assert.equal(reads, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    test('concurrent revision: A checked at v7 signs, B checked at v8 does not', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let current = 'v7';
+        const gate: Record<string, () => void> = {};
+        const source: X402PolicyHook['currentVersion'] = (ctx) =>
+            new Promise((r) => { gate[ctx.url] = () => r(current); });
+        const a = createPolicyGatedSigner(signer, { evaluate: versioned(), currentVersion: source }, call('https://a.example'));
+        const b = createPolicyGatedSigner(signer, { evaluate: versioned(), currentVersion: source }, call('https://b.example'));
+        const pa = outcomeOf(sign(a));
+        const pb = outcomeOf(sign(b));
+        while (!gate['https://a.example'] || !gate['https://b.example']) await delay(1);
+        gate['https://a.example']();
+        assert.equal(await pa, 'SIGNED');
+        current = 'v8';
+        gate['https://b.example']();
+        assert.equal(await pb, 'STALE');
+        assert.equal(calls.length, 1);
+    });
+});
+
+describe('signer identity', () => {
+    test('base signer address changes while the policy is evaluated: SIGNER_CHANGED, zero signer calls', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => { signer.address = Keypair.random().publicKey(); return { decision: 'ALLOW', contextHash: ctx.contextHash }; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNER_CHANGED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('base signer address changes while the version source is read: SIGNER_CHANGED', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow({ policyVersion: 'v7' }),
+            currentVersion: async () => { signer.address = Keypair.random().publicKey(); return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNER_CHANGED');
+        assert.equal(calls.length, 0);
+    });
+
+    test('base signer address changed before the call: SIGNER_CHANGED without consulting the policy', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let asked = 0;
+        const gated = createPolicyGatedSigner(signer, { evaluate: async (ctx) => { asked++; return { decision: 'ALLOW', contextHash: ctx.contextHash }; } }, call());
+        signer.address = Keypair.random().publicKey();
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNER_CHANGED');
+        assert.equal(asked, 0);
+        assert.equal(calls.length, 0);
+    });
+});
+
+describe('rejected before the policy is consulted', () => {
+    test('authorization that does not match the requirements', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let asked = 0;
+        const gated = createPolicyGatedSigner(signer, { evaluate: async (ctx) => { asked++; return { decision: 'ALLOW', contextHash: ctx.contextHash }; } }, call());
+        assert.equal(await outcomeOf(sign(gated, transferEntry({ amount: '999999999' }))), 'CONTEXT_MISMATCH');
+        assert.equal(await outcomeOf(sign(gated, transferEntry({ to: Keypair.random().publicKey() }))), 'CONTEXT_MISMATCH');
+        assert.equal(await outcomeOf(sign(gated, transferEntry({ sub: true }))), 'CONTEXT_MISMATCH');
+        assert.equal(await outcomeOf(sign(gated, transferEntry(), Networks.PUBLIC)), 'CONTEXT_MISMATCH');
+        assert.equal(asked, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    test('self-escalation: an invocation that is not transfer (e.g. set_admin)', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let asked = 0;
+        const gated = createPolicyGatedSigner(signer, { evaluate: async (ctx) => { asked++; return { decision: 'ALLOW', contextHash: ctx.contextHash }; } }, call());
+        assert.equal(await outcomeOf(sign(gated, transferEntry({ fn: 'set_admin' }))), 'CONTEXT_MISMATCH');
+        assert.equal(asked, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    test('transfer.from different from the signer', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const other = Keypair.random();
+        const gated = createPolicyGatedSigner({ ...signer, address: other.publicKey() }, { evaluate: allow() }, call());
+        const pre = xdr.HashIdPreimage.envelopeTypeSorobanAuthorization(new xdr.HashIdPreimageSorobanAuthorization({
+            networkId: hash(Buffer.from(Networks.TESTNET)), nonce: xdr.Int64.fromString('5'),
+            signatureExpirationLedger: LEDGER, invocation: invocation({}),
+        })).toXDR('base64');
+        assert.equal(await outcomeOf(gated.signAuthEntry(pre, { address: other.publicKey() })), 'CONTEXT_MISMATCH');
+        assert.equal(calls.length, 0);
+    });
+});
+
+describe('CAP-71 preimage (…WithAddress, stellar-sdk >= 16)', () => {
+    const cap71 = (address: string) => xdr.HashIdPreimage.envelopeTypeSorobanAuthorizationWithAddress(
+        new xdr.HashIdPreimageSorobanAuthorizationWithAddress({
+            networkId: hash(Buffer.from(Networks.TESTNET)),
+            nonce: xdr.Int64.fromString('7'),
+            invocation: invocation({}),
+            address: new Address(address).toScAddress(),
+            signatureExpirationLedger: LEDGER,
+        }),
+    ).toXDR('base64');
+
+    test('bound to the signer: decoded and evaluated', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let seen: X402PolicyContext | undefined;
+        const gated = createPolicyGatedSigner(signer, { evaluate: async (ctx) => { seen = ctx; return { decision: 'ALLOW', contextHash: ctx.contextHash }; } }, call());
+        assert.equal(await outcomeOf(gated.signAuthEntry(cap71(payer.publicKey()), { address: payer.publicKey() })), 'SIGNED');
+        assert.equal(seen!.authorization.preimageType, 'cap71');
+        assert.equal(calls.length, 1);
+    });
+
+    test('bound to another address: rejected before the policy', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let asked = 0;
+        const gated = createPolicyGatedSigner(signer, { evaluate: async (ctx) => { asked++; return { decision: 'ALLOW', contextHash: ctx.contextHash }; } }, call());
+        assert.equal(await outcomeOf(gated.signAuthEntry(cap71(Keypair.random().publicKey()), { address: payer.publicKey() })), 'CONTEXT_MISMATCH');
+        assert.equal(asked, 0);
+        assert.equal(calls.length, 0);
+    });
+});
+
+// El gate no verifica la firma que devuelve el signer: esa garantía la da
+// stellar-sdk >= 16, cuyo authorizeEntry comprueba la firma contra
+// sha256(preimage) antes de meterla en el entry. Si alguien baja el piso de
+// stellar-sdk o cambia el camino de firma, esto tiene que fallar.
+describe('signature/preimage mismatch is rejected by stellar-sdk, not by the gate', () => {
+    const mutateAmount = (preimageXdr: string) => {
+        const p = xdr.HashIdPreimage.fromXDR(preimageXdr, 'base64');
+        p.sorobanAuthorization().invocation().function().contractFn().args()[2] = nativeToScVal('999', { type: 'i128' });
+        return p.toXDR('base64');
+    };
+
+    test('a signature over altered bytes never becomes a signed entry', async () => {
+        const { calls, signer } = instrumentedSigner({ mutate: mutateAmount });
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow() }, call());
+        await assert.rejects(sign(gated), (e: any) => e.message.includes("signature doesn't match payload"));
+        assert.equal(calls.length, 1);
+    });
+
+    test('a signature by a different key never becomes a signed entry', async () => {
+        const intruder = Keypair.random();
+        const signer = {
+            address: payer.publicKey(),
+            signAuthEntry: async (preimageXdr: string) => ({
+                signedAuthEntry: intruder.sign(hash(xdr.HashIdPreimage.fromXDR(preimageXdr, 'base64').toXDR())).toString('base64'),
+            }),
+        };
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow() }, call());
+        await assert.rejects(sign(gated), (e: any) => e.message.includes("signature doesn't match payload"));
+    });
+});
+
+describe('timeout budget', () => {
+    test('never more than half the payment window', () => {
+        assert.equal(effectiveTimeoutMs({ evaluate: allow() }, 60), 5000);
+        assert.equal(effectiveTimeoutMs({ evaluate: allow() }, 4), 2000);
+        assert.equal(effectiveTimeoutMs({ evaluate: allow(), timeoutMs: 100 }, 60), 100);
+        assert.equal(effectiveTimeoutMs({ evaluate: allow() }, undefined), 5000);
+    });
+});
