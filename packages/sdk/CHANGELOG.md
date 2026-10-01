@@ -12,7 +12,7 @@ All notable changes to the `nirium` package are documented here.
 
 ### Changed
 
-- `@stellar/stellar-sdk` ^16.3.0 and `@x402/fetch`/`@x402/stellar`/`@x402/core` ^2.28.0. Node.js >= 22 is now required (both declare `engines.node >=22.0.0`).
+- `@stellar/stellar-sdk` ^16.3.0 and `@x402/fetch`/`@x402/stellar`/`@x402/core` ^2.28.0. Node.js >= 22 is now required: both declare `engines.node >=22.0.0`, and `nirium` itself now declares `engines.node >=22` so npm warns up front.
 
 ## 0.15.0 - 2026-09-24
 
