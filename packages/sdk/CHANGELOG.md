@@ -2,7 +2,7 @@
 
 All notable changes to the `nirium` package are documented here.
 
-## Unreleased
+## 0.16.0 - 2026-10-01
 
 ### Added
 
