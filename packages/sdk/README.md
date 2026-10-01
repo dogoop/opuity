@@ -331,7 +331,7 @@ Anchor a **hash** rather than the data itself: IPFS content cannot be deleted, s
 
 ## Requirements
 
-- Node.js >= 22 (required by `@stellar/stellar-sdk` 16 and `@x402/stellar` 2.28, both declare `engines.node >=22.0.0`)
+- Node.js >= 22.12.0. `@stellar/stellar-sdk` 16 and `@x402/stellar` 2.28 declare `>=22.0.0`, but stellar-sdk 16 depends on `@noble/hashes` 2.x, which is ESM-only, and this package is published as CommonJS: `require('nirium')` only works without a flag from Node 22.12.0 (on 22.11 it throws `ERR_REQUIRE_ESM`)
 - TypeScript >= 5.0
 
 ## Links

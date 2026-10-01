@@ -12,7 +12,7 @@ All notable changes to the `nirium` package are documented here.
 
 ### Changed
 
-- `@stellar/stellar-sdk` ^16.3.0 and `@x402/fetch`/`@x402/stellar`/`@x402/core` ^2.28.0. Node.js >= 22 is now required: both declare `engines.node >=22.0.0`, and `nirium` itself now declares `engines.node >=22` so npm warns up front.
+- `@stellar/stellar-sdk` ^16.3.0 and `@x402/fetch`/`@x402/stellar`/`@x402/core` ^2.28.0. Node.js >= 22.12.0 is now required, and `nirium` declares it in `engines.node` so npm warns up front. The two packages declare `>=22.0.0`, but stellar-sdk 16 pulls in the ESM-only `@noble/hashes` 2.x, and `require()` of an ES module works without a flag only from Node 22.12.0 (on 22.11 `require('nirium')` throws `ERR_REQUIRE_ESM`).
 
 ## 0.15.0 - 2026-09-24
 
