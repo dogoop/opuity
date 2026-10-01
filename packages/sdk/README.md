@@ -2,7 +2,7 @@
 
 Autonomous treasury and agentic-payments infrastructure for **Nirium Protocol** on Stellar/Soroban.
 
-Nirium agents rebalance USDC ↔ CETES (tokenized Mexican T-bills via Etherfuse) 24/7 without human intervention. Built for developers who want to integrate autonomous treasury management, agentic payments (x402 + MPP) — in both directions, paying for other APIs with `initX402()` and charging for your own with `x402Serve()` — and real-time market data into their applications.
+Nirium agents rebalance USDC ↔ CETES (tokenized Mexican T-bills via Etherfuse) 24/7 without human intervention. Built for developers who want to integrate autonomous treasury management, agentic payments with x402 (in both directions: paying for other APIs with `initX402()` and charging for your own with `x402Serve()`), an experimental MPP Charge client, and real-time market data into their applications.
 
 ## Install
 
@@ -61,7 +61,7 @@ agent.subscribe((signal) => {
 | Admin | `configureLLM()` |
 | WebSocket | `subscribe()`, `onLog()`, `disconnect()` |
 | x402 Payments | `initX402()`, `x402Fetch()` |
-| MPP Payments | `initMpp()`, `mppFetch()` |
+| MPP Charge client (experimental, see below) | `initMpp()`, `mppFetch()` |
 
 ## Authentication
 
@@ -152,17 +152,22 @@ Only an `ALLOW` that echoes this authorization's `contextHash`, and is still val
 
 **What this does not do.** It is a check on the agent side, not account-level enforcement: code in the same process that holds the raw signer can still call it directly (so can code that replaces its `signAuthEntry`, which is looked up at call time), and nothing on-chain enforces the policy. It does not reserve capacity across concurrent payments: two calls evaluated at the same time can each fit a limit that together they exceed; an aggregate cap has to be held by your policy. Discussed in [#96](https://github.com/nirium-protocol/nirium/issues/96), where @CodeDeityX laid out the agent-side cases this hook is built against.
 
-### MPP — Session-Based Budget Delegation
-```typescript
-agent.initMpp({
-  secretKey: 'S...',
-  network: 'stellar:testnet',
-  mode: 'pull',
-});
+### MPP Charge (experimental)
 
-const response = await agent.mppFetch('https://nirium-agent.fly.dev/api/v1/mpp/signals');
-const data = await response.json();
+```typescript
+agent.initMpp({ secretKey: 'S...', mode: 'pull' }); // 'pull' (default) or 'push'
+
+const response = await agent.mppFetch('https://your-mpp-server.example/resource');
 ```
+
+`initMpp()` builds an MPP Charge client: the server answers `402` with a challenge, the client signs a USDC transfer on Stellar, and the server verifies and settles it. The network comes from the server's challenge, so `network` in the config is accepted but unused.
+
+**Do not use it in production, and do not point it at Nirium's hosted endpoints yet.**
+
+- The client works against a compliant MPP Charge server. We checked it against Nirium's own MPP middleware running locally against testnet, in `pull` and in `push` mode.
+- Nirium's hosted `/api/v1/mpp/*` endpoints currently reject MPP payments with `402 Verification Failed`, in `pull` and in `push` mode. We reproduced this on the testnet endpoint; we have not tested the mainnet one and you should expect the same. We have not found the cause yet.
+- In `push` mode the payment settles on-chain before the server verifies it, so a request the server rejects is **not refunded**.
+- Until this is diagnosed, use x402 (`initX402()`) for paid endpoints. The `get_mpp_*` tools of the MCP server have the same limitation.
 
 ### x402Serve() — Charging Your Own API
 
@@ -194,7 +199,7 @@ Runs on **your own server**, not Nirium's — `x402Serve()` is a client-side fun
 | **Protected** (API key) | `execute`, `market`, `loop/start\|stop\|scan`, `subscriptions`, `skills/install`, `webhooks` |
 | **WebSocket** (JWT) | `/ws/signals` — real-time signal stream |
 | **x402 Premium** | `/api/v1/premium/signals` ($0.02 USDC), `/api/v1/premium/market` ($0.05 USDC) |
-| **MPP** | `/api/v1/mpp/signals`, `/api/v1/mpp/market` |
+| **MPP Charge** | `/api/v1/mpp/signals`, `/api/v1/mpp/market` (hosted endpoints currently reject MPP payments, see [MPP Charge](#mpp-charge-experimental)) |
 
 ### x402 Metrics — Observability Wrapper
 

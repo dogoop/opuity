@@ -12,7 +12,7 @@ import { x402Client as X402ClientClass, wrapFetchWithPayment } from '@x402/fetch
 import { createEd25519Signer } from '@x402/stellar';
 // @ts-ignore
 import { ExactStellarScheme } from '@x402/stellar/exact/client';
-// @ts-ignore — ESM subpath imports (mismo patrón que los de @x402 de arriba)
+// @ts-ignore: ESM subpath imports (mismo patrón que los de @x402 de arriba)
 import { Mppx as MppxClient } from 'mppx/client';
 // @ts-ignore
 import { stellar as mppStellar } from '@stellar/mpp/charge/client';
@@ -1259,6 +1259,12 @@ export class Agent {
     /**
      * Initialize the MPP Charge client for per-request Soroban SAC payments.
      * Uses canonical @stellar/mpp charge mode with mppx.
+     *
+     * EXPERIMENTAL. The client works against a compliant MPP Charge server, but
+     * Nirium's hosted `/api/v1/mpp/*` endpoints currently reject MPP payments
+     * (`402 Verification Failed`), and in `push` mode the payment has already
+     * settled on-chain when that happens. Use `initX402()` for paid endpoints
+     * until this is resolved. See the README.
      * In pull mode, the server assembles and broadcasts the transaction.
      *
      * @example
