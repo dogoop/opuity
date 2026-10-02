@@ -712,3 +712,103 @@ describe('receipts: SIGNED only exists once the signer returned a signature', ()
     });
 });
 
+describe('observer runs before the final checks (what it provokes is detected)', () => {
+    // Antes: el observador corría DESPUES de la última comprobación y justo antes del signer,
+    // así que un callback síncrono podía mover el reloj, la versión o la identidad sin que nada lo viera.
+    const onAllowed = (fn: () => void, sink: X402PolicyRecord[] = []) => (r: X402PolicyRecord) => {
+        sink.push(r);
+        if (r.outcome === 'ALLOWED') fn();
+    };
+    const outcomes = (rs: X402PolicyRecord[]) => rs.map((r) => r.outcome);
+
+    test('observer pushes the injected clock past expiresAt: EXPIRED, zero signer calls', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const rs: X402PolicyRecord[] = [];
+        let t = 1000;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => t, evaluate: allow({ expiresAt: 2000 }), onDecision: onAllowed(() => { t = 2000; }, rs),
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'EXPIRED');
+        assert.equal(calls.length, 0);
+        assert.deepEqual(outcomes(rs), ['ALLOWED', 'EXPIRED']);
+    });
+
+    test('observer pushes the clock past the deadline (no currentVersion configured): TIMEOUT', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let t = 1000;
+        const gated = createPolicyGatedSigner(signer, {
+            timeoutMs: 50, now: () => t, evaluate: allow(), onDecision: onAllowed(() => { t = 1050; }),
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'TIMEOUT');
+        assert.equal(calls.length, 0);
+    });
+
+    test('observer that makes the clock NaN: CLOCK_INVALID', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let t = 1000;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => t, evaluate: allow({ expiresAt: 2000 }), onDecision: onAllowed(() => { t = NaN; }),
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'CLOCK_INVALID');
+        assert.equal(calls.length, 0);
+    });
+
+    test('observer changes the policy version: the later read sees it, STALE', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const rs: X402PolicyRecord[] = [];
+        let current = 'v7';
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow({ policyVersion: 'v7' }), currentVersion: async () => current,
+            onDecision: onAllowed(() => { current = 'v8'; }, rs),
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'STALE');
+        assert.equal(calls.length, 0);
+        assert.deepEqual(outcomes(rs), ['ALLOWED', 'STALE']);
+    });
+
+    for (const withVersion of [false, true]) test(`observer changes the base signer's address${withVersion ? ' (with currentVersion)' : ''}: SIGNER_CHANGED`, async () => {
+        const { calls, signer } = instrumentedSigner();
+        const rs: X402PolicyRecord[] = [];
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(withVersion ? { policyVersion: 'v7' } : {}),
+            ...(withVersion ? { currentVersion: async () => 'v7' } : {}),
+            onDecision: onAllowed(() => { signer.address = Keypair.random().publicKey(); }, rs),
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNER_CHANGED');
+        assert.equal(calls.length, 0);
+        assert.deepEqual(outcomes(rs), ['ALLOWED', 'SIGNER_CHANGED']);
+    });
+
+    test('a throwing observer is still swallowed and the payment is still decided by the checks', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(), onDecision: (r) => { if (r.outcome === 'ALLOWED') throw new Error('observer bug'); },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNED');
+        assert.equal(calls.length, 1);
+    });
+
+    test('a harmless observer changes nothing: ALLOWED, SIGNED, one signer call', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const rs: X402PolicyRecord[] = [];
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow({ policyVersion: 'v7', expiresAt: Date.now() + 60_000 }), currentVersion: async () => 'v7',
+            onDecision: (r) => { rs.push(r); },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNED');
+        assert.equal(calls.length, 1);
+        assert.deepEqual(outcomes(rs), ['ALLOWED', 'SIGNED']);
+    });
+
+    test('a malformed ALLOW (no policyVersion with currentVersion set) is refused before ALLOWED is reported', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const rs: X402PolicyRecord[] = [];
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(), currentVersion: async () => 'v7', onDecision: (r) => { rs.push(r); },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'MALFORMED');
+        assert.deepEqual(outcomes(rs), ['MALFORMED']);
+        assert.equal(calls.length, 0);
+    });
+});
+

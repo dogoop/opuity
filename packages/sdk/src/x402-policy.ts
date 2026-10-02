@@ -72,12 +72,17 @@ export type X402PolicyOutcome =
     | 'STALE' | 'VERSION_UNAVAILABLE' | 'SIGNER_CHANGED' | 'CLOCK_INVALID';
 
 /**
- * `ALLOWED`: the engine's ALLOW was accepted and the signer is about to be
- * called; it is a notice, not a result. `SIGNED`: the signer returned a
- * signature. `SIGNER_ERROR`: the signer rejected, threw, or returned no
- * `signedAuthEntry`. Every other value is a refusal and nothing was signed.
- * A payment that reached the signer has an `ALLOWED` record followed by
- * exactly one of `SIGNED` or `SIGNER_ERROR`.
+ * `ALLOWED`: the engine's ALLOW is well formed, bound to this authorization
+ * and not expired yet. It is a notice, not a result: the observer runs here,
+ * and the freshness and identity checks that follow it can still refuse
+ * (STALE, EXPIRED, TIMEOUT, CLOCK_INVALID, VERSION_UNAVAILABLE, SIGNER_CHANGED).
+ * `SIGNED`: the signer returned a signature. `SIGNER_ERROR`: the signer
+ * rejected, threw, or returned no `signedAuthEntry`. Every other value is a
+ * refusal and nothing was signed.
+ * Sequence: `ALLOWED`, then either a refusal, or exactly one of `SIGNED` or
+ * `SIGNER_ERROR`. Refusals that happen before the ALLOW is accepted (DENY, WAIT,
+ * UNBOUND, MALFORMED, TIMEOUT or ENGINE_ERROR while evaluating, CONTEXT_MISMATCH)
+ * are a single record with no `ALLOWED`.
  */
 export interface X402PolicyRecord {
     outcome: X402PolicyOutcome;
@@ -107,6 +112,8 @@ export interface X402PolicyHook {
      * This check is NOT atomic with signing: the version can change after it is
      * read, or while the signer runs. It narrows the stale-ALLOW window to the
      * synchronous step between this read and the signer call; it does not close it.
+     * The `onDecision` observer runs before this read, so a version change it
+     * causes is seen by it.
      */
     currentVersion?: (ctx: X402PolicyContext, opts: { signal: AbortSignal }) => Promise<string>;
     /**
@@ -280,7 +287,11 @@ export function effectiveTimeoutMs(policy: X402PolicyHook, maxTimeoutSeconds?: n
  * @x402/fetch re-wraps errors and loses their class.
  *
  * Not a security boundary against code in the same process: anyone holding
- * the base signer can still call it directly.
+ * the base signer can still call it directly. Callbacks (`evaluate`,
+ * `currentVersion`, `onDecision`) all run before the final clock and identity
+ * checks, so what they change in the clock, the version source or the base
+ * signer's `address` is detected. Replacing `base.signAuthEntry` itself is not:
+ * it is looked up at call time, after those checks.
  */
 export function createPolicyGatedSigner(
     base: X402BaseSigner,
@@ -382,12 +393,19 @@ export function createPolicyGatedSigner(
                 if (t >= deadline) refuse('TIMEOUT', 'decision arrived after the deadline', context, allow);
                 if (allow.expiresAt !== undefined && t >= allow.expiresAt) refuse('EXPIRED', 'ALLOW expired before signing', context, allow);
             };
+            if (policy.currentVersion && !nonempty(allow.policyVersion)) {
+                return refuse('MALFORMED', 'ALLOW has no policyVersion to check against currentVersion', context, allow);
+            }
             checkClock();
 
+            // El observador corre AQUI y no junto al signer: todo lo que provoque
+            // (adelantar el reloj, cambiar la versión de la política, cambiar la
+            // dirección del signer) lo ven las comprobaciones que siguen. Lo que
+            // hace un callback después de la última de ellas ya no existe: entre
+            // la última comprobación y el signer no corre código ajeno.
+            report({ outcome: 'ALLOWED', context, decision: allow });
+
             if (policy.currentVersion) {
-                if (!nonempty(allow.policyVersion)) {
-                    return refuse('MALFORMED', 'ALLOW has no policyVersion to check against currentVersion', context, allow);
-                }
                 let current: unknown;
                 try {
                     current = await Promise.race([
@@ -402,16 +420,16 @@ export function createPolicyGatedSigner(
                 if (current !== allow.policyVersion) {
                     return refuse('STALE', `ALLOW was issued under policy ${allow.policyVersion}, current is ${current}`, context, allow);
                 }
-                // El reloj se vuelve a leer después del await.
-                checkClock();
             }
 
-            // Último chequeo antes de firmar, sin ningún await en medio.
+            // Comprobaciones finales, siempre, y sin ningún await antes del signer:
+            // el reloj se vuelve a leer (después del observador y del await de la
+            // versión) y la identidad se compara por última vez.
+            checkClock();
             if (base.address !== account) return refuse('SIGNER_CHANGED', 'base signer address changed while the policy was evaluated', context, allow);
             // La fase previa terminó: la firma no tiene plazo propio, así que el
             // temporizador ya no pinta nada.
             if (timer) clearTimeout(timer);
-            report({ outcome: 'ALLOWED', context, decision: allow });
             // SIGNED solo existe si el signer devolvió una firma. Los bytes son
             // los del parámetro original, no una copia que alguien pudo tocar.
             let signed: Awaited<ReturnType<SignFn>>;
