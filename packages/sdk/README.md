@@ -111,9 +111,11 @@ try {
 
 The error carries `url`, `amount` (atomic units, the cheapest offer when the server lists several), `formattedAmount`, `asset`, `network` and `cap`, and `signerCalled` is always `false`: nothing was signed or sent. The cap is enforced by `@x402/core` and cannot be changed from `initX402()` yet. Other `spendControls` rejections (for example a non-default asset) still surface as the original error.
 
-#### Pre-sign policy hook
+#### Pre-sign policy hook (experimental)
 
 Pass `policy` to `initX402()` and every `x402Fetch()` asks your policy before anything is signed. The question is asked after the Stellar authorization is built, so the policy sees exactly what would be signed: amount, destination, asset, nonce, expiration ledger and network, decoded from the bytes.
+
+**Experimental, new in 0.16.0.** The shape of `policy` (the context object, the outcomes, the records `onDecision` receives) can still change in a minor release before 1.0.0. Its scope is the agent-side cases that [#96](https://github.com/nirium-protocol/nirium/issues/96) groups as G1 (they come from the harness of @CodeDeityX), and nothing beyond them. What it does not cover is listed in the last paragraph of this section: code in the same process that holds the raw signer (L02 in that discussion), and capacity across concurrent payments.
 
 ```typescript
 import { X402PolicyError } from 'nirium';
@@ -150,7 +152,7 @@ Only an `ALLOW` that echoes this authorization's `contextHash`, and is still val
 
 **Signature check.** The hook only checks that the signer returned a non-empty `signedAuthEntry`; it does not verify the signature itself. That check comes from `@stellar/stellar-sdk`: `authorizeEntry` verifies the signature against sha256 of the preimage before it enters the transaction (verified in 16.3.0, the version this package requires). A signature over different bytes, or by a different key, never reaches the merchant; a test in this package pins that.
 
-**What this does not do.** It is a check on the agent side, not account-level enforcement: code in the same process that holds the raw signer can still call it directly (so can code that replaces its `signAuthEntry`, which is looked up at call time), and nothing on-chain enforces the policy. It does not reserve capacity across concurrent payments: two calls evaluated at the same time can each fit a limit that together they exceed; an aggregate cap has to be held by your policy. Discussed in [#96](https://github.com/nirium-protocol/nirium/issues/96), where @CodeDeityX laid out the agent-side cases this hook is built against.
+**What this does not do.** It is a check on the agent side, not account-level enforcement: code in the same process that holds the raw signer can still call it directly (the L02 limit in #96; so can code that replaces its `signAuthEntry`, which is looked up at call time), and nothing on-chain enforces the policy. It does not reserve capacity across concurrent payments: two calls evaluated at the same time can each fit a limit that together they exceed; an aggregate cap has to be held by your policy. Discussed in [#96](https://github.com/nirium-protocol/nirium/issues/96), where @CodeDeityX laid out the agent-side cases this hook is built against.
 
 ### MPP Charge (experimental)
 
