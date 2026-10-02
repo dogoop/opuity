@@ -625,3 +625,90 @@ describe('clock (fails closed when it is not a finite number)', () => {
         assert.doesNotThrow(() => assertValidPolicyHook({ evaluate: allow(), now: () => 1 }));
     });
 });
+
+describe('receipts: SIGNED only exists once the signer returned a signature', () => {
+    // Antes: SIGNED se registraba justo ANTES de llamar al signer, aunque luego rechazara o fallara.
+    const watch = () => {
+        const records: X402PolicyRecord[] = [];
+        const refused: X402PolicyError[] = [];
+        return { records, refused, outcomes: () => records.map((r) => r.outcome), onDecision: (r: X402PolicyRecord) => { records.push(r); } };
+    };
+    const customSigner = (signAuthEntry: (p: string) => any) => {
+        const calls: string[] = [];
+        return { calls, signer: { address: payer.publicKey(), signAuthEntry: (p: string) => { calls.push(p); return signAuthEntry(p); } } as any };
+    };
+
+    test('success: ALLOWED, then SIGNED only after the signer resolved', async () => {
+        const w = watch();
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const base = instrumentedSigner();
+        const slow = { address: base.signer.address, signAuthEntry: async (p: string) => { await gate; return base.signer.signAuthEntry(p); } };
+        const gated = createPolicyGatedSigner(slow, { evaluate: allow(), onDecision: w.onDecision }, call());
+        const pending = sign(gated);
+        while (base.calls.length === 0 && w.outcomes().length < 1) await delay(1);
+        await delay(10);
+        assert.deepEqual(w.outcomes(), ['ALLOWED'], 'signer still running: nothing may say SIGNED yet');
+        release();
+        await pending;
+        assert.deepEqual(w.outcomes(), ['ALLOWED', 'SIGNED']);
+        assert.equal(w.records[1].context!.url, 'https://api.example/paid');
+        assert.equal(w.records[1].decision!.decision, 'ALLOW');
+    });
+
+    test('signer rejects: ALLOWED then SIGNER_ERROR, never SIGNED, and its own error comes through untouched', async () => {
+        const w = watch();
+        const { calls, signer } = customSigner(async () => { throw new Error('hsm offline'); });
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow(), onDecision: w.onDecision }, call(), (e) => w.refused.push(e));
+        const err = await sign(gated).catch((e) => e);
+        assert.ok(!(err instanceof X402PolicyError), 'a signer failure is not a policy refusal');
+        assert.match(err.message, /hsm offline/);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(w.outcomes(), ['ALLOWED', 'SIGNER_ERROR']);
+        assert.equal(w.records[1].error, 'hsm offline');
+        assert.equal(w.refused.length, 0);
+    });
+
+    test('signer throws synchronously: same records, same untouched error', async () => {
+        const w = watch();
+        const { calls, signer } = customSigner(() => { throw new Error('sync boom'); });
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow(), onDecision: w.onDecision }, call());
+        const err = await sign(gated).catch((e) => e);
+        assert.ok(!(err instanceof X402PolicyError));
+        assert.match(err.message, /sync boom/);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(w.outcomes(), ['ALLOWED', 'SIGNER_ERROR']);
+    });
+
+    const unusable: Array<[string, unknown]> = [
+        ['undefined', undefined], ['null', null], ['an empty object', {}],
+        ['an empty signedAuthEntry', { signedAuthEntry: '' }], ['a non-string signedAuthEntry', { signedAuthEntry: 7 }],
+    ];
+    for (const [label, value] of unusable) test(`signer resolves with ${label}: SIGNER_ERROR refusal, never SIGNED`, async () => {
+        const w = watch();
+        const { calls, signer } = customSigner(async () => value);
+        const gated = createPolicyGatedSigner(signer, { evaluate: allow(), onDecision: w.onDecision }, call(), (e) => w.refused.push(e));
+        const err = await sign(gated).catch((e) => e);
+        assert.ok(err instanceof X402PolicyError);
+        assert.equal(err.outcome, 'SIGNER_ERROR');
+        assert.equal(err.message, 'x402 policy SIGNER_ERROR: signer returned no signedAuthEntry');
+        assert.equal(calls.length, 1);
+        assert.deepEqual(w.outcomes(), ['ALLOWED', 'SIGNER_ERROR']);
+        assert.equal(w.refused.length, 1);
+    });
+
+    test('a refusal before the signer is one record and never mentions ALLOWED or SIGNED', async () => {
+        for (const [engine, expected] of [
+            [async (ctx: X402PolicyContext) => ({ decision: 'DENY' as const, contextHash: ctx.contextHash }), 'DENY'],
+            [async () => ({ decision: 'ALLOW' as const, contextHash: 'nope' }), 'UNBOUND'],
+        ] as const) {
+            const w = watch();
+            const { calls, signer } = instrumentedSigner();
+            const gated = createPolicyGatedSigner(signer, { evaluate: engine, onDecision: w.onDecision }, call());
+            assert.equal(await outcomeOf(sign(gated)), expected);
+            assert.deepEqual(w.outcomes(), [expected]);
+            assert.equal(calls.length, 0);
+        }
+    });
+});
+

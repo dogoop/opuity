@@ -67,10 +67,18 @@ export interface X402PolicyDecision {
 }
 
 export type X402PolicyOutcome =
-    | 'SIGNED' | 'DENY' | 'WAIT' | 'TIMEOUT' | 'ENGINE_ERROR'
+    | 'ALLOWED' | 'SIGNED' | 'SIGNER_ERROR' | 'DENY' | 'WAIT' | 'TIMEOUT' | 'ENGINE_ERROR'
     | 'EXPIRED' | 'UNBOUND' | 'MALFORMED' | 'CONTEXT_MISMATCH'
     | 'STALE' | 'VERSION_UNAVAILABLE' | 'SIGNER_CHANGED' | 'CLOCK_INVALID';
 
+/**
+ * `ALLOWED`: the engine's ALLOW was accepted and the signer is about to be
+ * called; it is a notice, not a result. `SIGNED`: the signer returned a
+ * signature. `SIGNER_ERROR`: the signer rejected, threw, or returned no
+ * `signedAuthEntry`. Every other value is a refusal and nothing was signed.
+ * A payment that reached the signer has an `ALLOWED` record followed by
+ * exactly one of `SIGNED` or `SIGNER_ERROR`.
+ */
 export interface X402PolicyRecord {
     outcome: X402PolicyOutcome;
     context?: X402PolicyContext;
@@ -108,7 +116,11 @@ export interface X402PolicyHook {
     timeoutMs?: number;
     /** If true, an ALLOW without expiresAt is treated as unsignable. Default false. */
     requireExpiry?: boolean;
-    /** Observer for receipts. Cannot change the outcome; its errors are swallowed. */
+    /**
+     * Observer for receipts (see X402PolicyRecord for the sequence). Cannot
+     * change the outcome; a synchronous throw is swallowed. A callback that
+     * returns a promise is not awaited and its rejection is NOT handled here.
+     */
     onDecision?: (record: X402PolicyRecord) => void;
     /**
      * Injectable clock (epoch ms), for tests. It must return a finite number
@@ -119,12 +131,15 @@ export interface X402PolicyHook {
     now?: () => number;
 }
 
+/** Outcomes that mean no signature was released (the payment is refused). */
+export type X402PolicyRefusal = Exclude<X402PolicyOutcome, 'ALLOWED' | 'SIGNED'>;
+
 export class X402PolicyError extends Error {
-    readonly outcome: Exclude<X402PolicyOutcome, 'SIGNED'>;
+    readonly outcome: X402PolicyRefusal;
     readonly decision?: X402PolicyDecision;
     readonly contextHash?: string;
     constructor(
-        outcome: Exclude<X402PolicyOutcome, 'SIGNED'>,
+        outcome: X402PolicyRefusal,
         message: string,
         extra: { decision?: X402PolicyDecision; contextHash?: string } = {},
     ) {
@@ -293,7 +308,7 @@ export function createPolicyGatedSigner(
         try { policy.onDecision?.(r); } catch { /* un observador no decide nada */ }
     };
     const refuse = (
-        outcome: Exclude<X402PolicyOutcome, 'SIGNED'>, msg: string,
+        outcome: X402PolicyRefusal, msg: string,
         context?: X402PolicyContext, decision?: X402PolicyDecision,
     ): never => {
         report({ outcome, context, decision, error: msg });
@@ -393,9 +408,25 @@ export function createPolicyGatedSigner(
 
             // Último chequeo antes de firmar, sin ningún await en medio.
             if (base.address !== account) return refuse('SIGNER_CHANGED', 'base signer address changed while the policy was evaluated', context, allow);
+            // La fase previa terminó: la firma no tiene plazo propio, así que el
+            // temporizador ya no pinta nada.
+            if (timer) clearTimeout(timer);
+            report({ outcome: 'ALLOWED', context, decision: allow });
+            // SIGNED solo existe si el signer devolvió una firma. Los bytes son
+            // los del parámetro original, no una copia que alguien pudo tocar.
+            let signed: Awaited<ReturnType<SignFn>>;
+            try {
+                signed = await base.signAuthEntry(preimageXdr, opts);
+            } catch (e: any) {
+                // El error del signer se relanza tal cual: no es una negativa de la política.
+                report({ outcome: 'SIGNER_ERROR', context, decision: allow, error: e?.message ?? String(e) });
+                throw e;
+            }
+            if (!signed || typeof signed !== 'object' || !nonempty(signed.signedAuthEntry)) {
+                return refuse('SIGNER_ERROR', 'signer returned no signedAuthEntry', context, allow);
+            }
             report({ outcome: 'SIGNED', context, decision: allow });
-            // Los bytes del parámetro original, no una copia que alguien pudo tocar.
-            return base.signAuthEntry(preimageXdr, opts);
+            return signed;
         } finally {
             if (timer) clearTimeout(timer);
         }
