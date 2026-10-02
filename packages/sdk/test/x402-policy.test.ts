@@ -12,9 +12,11 @@ import {
     Keypair, Networks, xdr, Address, nativeToScVal, authorizeEntry, hash,
 } from '@stellar/stellar-sdk';
 import {
-    createPolicyGatedSigner, effectiveTimeoutMs, X402PolicyError,
+    createPolicyGatedSigner, effectiveTimeoutMs, assertValidPolicyHook, X402PolicyError,
 } from '../src/x402-policy.ts';
-import type { X402PolicyHook, X402PaymentRequirementsView, X402PolicyContext } from '../src/x402-policy.ts';
+import type {
+    X402PolicyHook, X402PaymentRequirementsView, X402PolicyContext, X402PolicyRecord,
+} from '../src/x402-policy.ts';
 
 const payer = Keypair.random();
 const merchant = Keypair.random().publicKey();
@@ -538,5 +540,88 @@ describe('timeout budget', () => {
         assert.equal(effectiveTimeoutMs({ evaluate: allow() }, 4), 2000);
         assert.equal(effectiveTimeoutMs({ evaluate: allow(), timeoutMs: 100 }, 60), 100);
         assert.equal(effectiveTimeoutMs({ evaluate: allow() }, undefined), 5000);
+    });
+});
+
+describe('clock (fails closed when it is not a finite number)', () => {
+    // Antes: now() => NaN dejaba falsas todas las comparaciones y el pago se firmaba.
+    const bad: Array<[string, unknown]> = [
+        ['NaN', NaN], ['undefined', undefined], ['null', null], ['a numeric string', '123'],
+        ['Infinity', Infinity], ['-Infinity', -Infinity],
+    ];
+
+    for (const [label, value] of bad) test(`now() returns ${label} from the start: CLOCK_INVALID, policy not consulted, zero signer calls`, async () => {
+        const { calls, signer } = instrumentedSigner();
+        let asked = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => value as any,
+            evaluate: async (ctx) => { asked++; return { decision: 'ALLOW', contextHash: ctx.contextHash }; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'CLOCK_INVALID');
+        assert.equal(asked, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    for (const [label, value] of bad) for (const withExpiry of [false, true]) {
+        test(`now() turns ${label} after the policy answered${withExpiry ? ' (ALLOW carries expiresAt)' : ''}: CLOCK_INVALID, zero signer calls`, async () => {
+            const { calls, signer } = instrumentedSigner();
+            let reads = 0;
+            const gated = createPolicyGatedSigner(signer, {
+                now: () => (++reads === 1 ? 1000 : (value as any)),
+                evaluate: allow(withExpiry ? { expiresAt: 2000 } : {}),
+            }, call());
+            assert.equal(await outcomeOf(sign(gated)), 'CLOCK_INVALID');
+            assert.equal(calls.length, 0);
+        });
+    }
+
+    test('now() turns NaN after the version source was read: CLOCK_INVALID, zero signer calls', async () => {
+        const { calls, signer } = instrumentedSigner();
+        let t: number = 1000;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => t, evaluate: allow({ policyVersion: 'v7', expiresAt: 5000 }),
+            currentVersion: async () => { t = NaN; return 'v7'; },
+        }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'CLOCK_INVALID');
+        assert.equal(calls.length, 0);
+    });
+
+    for (const when of ['first read', 'later read'] as const) test(`now() throws on the ${when}: CLOCK_INVALID, not a raw error`, async () => {
+        const { calls, signer } = instrumentedSigner();
+        let reads = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => { if (++reads === (when === 'first read' ? 1 : 2)) throw new Error('clock offline'); return 1000; },
+            evaluate: allow(),
+        }, call());
+        const err = await sign(gated).catch((e) => e);
+        assert.ok(err instanceof X402PolicyError);
+        assert.equal(err.outcome, 'CLOCK_INVALID');
+        assert.match(err.message, /clock threw \(clock offline\)/);
+        assert.equal(calls.length, 0);
+    });
+
+    test('the refusal reaches the observer and onRefused', async () => {
+        const { signer } = instrumentedSigner();
+        const records: X402PolicyRecord[] = [];
+        const refused: X402PolicyError[] = [];
+        const gated = createPolicyGatedSigner(signer, {
+            now: () => NaN, evaluate: allow(), onDecision: (r) => records.push(r),
+        }, call(), (e) => refused.push(e));
+        await sign(gated).catch(() => {});
+        assert.deepEqual(records.map((r) => r.outcome), ['CLOCK_INVALID']);
+        assert.equal(refused.length, 1);
+        assert.equal(refused[0].outcome, 'CLOCK_INVALID');
+    });
+
+    test('a finite clock still signs', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, { now: () => 1000, evaluate: allow({ expiresAt: 2000 }) }, call());
+        assert.equal(await outcomeOf(sign(gated)), 'SIGNED');
+        assert.equal(calls.length, 1);
+    });
+
+    test('a `now` that is not a function is rejected when the hook is configured', () => {
+        assert.throws(() => assertValidPolicyHook({ evaluate: allow(), now: 5 as any }), /policy\.now/);
+        assert.doesNotThrow(() => assertValidPolicyHook({ evaluate: allow(), now: () => 1 }));
     });
 });

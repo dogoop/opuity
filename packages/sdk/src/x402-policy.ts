@@ -69,7 +69,7 @@ export interface X402PolicyDecision {
 export type X402PolicyOutcome =
     | 'SIGNED' | 'DENY' | 'WAIT' | 'TIMEOUT' | 'ENGINE_ERROR'
     | 'EXPIRED' | 'UNBOUND' | 'MALFORMED' | 'CONTEXT_MISMATCH'
-    | 'STALE' | 'VERSION_UNAVAILABLE' | 'SIGNER_CHANGED';
+    | 'STALE' | 'VERSION_UNAVAILABLE' | 'SIGNER_CHANGED' | 'CLOCK_INVALID';
 
 export interface X402PolicyRecord {
     outcome: X402PolicyOutcome;
@@ -110,7 +110,12 @@ export interface X402PolicyHook {
     requireExpiry?: boolean;
     /** Observer for receipts. Cannot change the outcome; its errors are swallowed. */
     onDecision?: (record: X402PolicyRecord) => void;
-    /** Injectable clock (epoch ms), for tests. */
+    /**
+     * Injectable clock (epoch ms), for tests. It must return a finite number
+     * every time it is read: anything else (NaN, undefined, a string, a throw)
+     * refuses the payment with CLOCK_INVALID, because every comparison against
+     * NaN is false and a deadline that can never be reached would sign.
+     */
     now?: () => number;
 }
 
@@ -158,6 +163,9 @@ export function assertValidPolicyHook(policy: X402PolicyHook): void {
     if (policy.timeoutMs !== undefined
         && (!Number.isSafeInteger(policy.timeoutMs) || policy.timeoutMs <= 0)) {
         throw new Error('initX402: `policy.timeoutMs` must be a positive integer (ms).');
+    }
+    if (policy.now !== undefined && typeof policy.now !== 'function') {
+        throw new Error('initX402: `policy.now`, when set, must be a function returning epoch milliseconds.');
     }
 }
 
@@ -269,6 +277,18 @@ export function createPolicyGatedSigner(
     // del pago, no se firma: lo evaluado se evaluó para esta cuenta.
     const account = base.address;
     const now = policy.now ?? Date.now;
+    // Un reloj que no devuelve un número finito cierra: NaN hace falsa cada
+    // comparación (`t >= deadline`), y un plazo que nunca se alcanza firmaría.
+    const readClock = (context?: X402PolicyContext, decision?: X402PolicyDecision): number => {
+        let t: unknown;
+        try { t = now(); } catch (e: any) {
+            return refuse('CLOCK_INVALID', `clock threw (${e?.message ?? String(e)})`, context, decision);
+        }
+        if (typeof t !== 'number' || !Number.isFinite(t)) {
+            return refuse('CLOCK_INVALID', `clock returned ${String(t)}, not epoch milliseconds`, context, decision);
+        }
+        return t;
+    };
     const report = (r: X402PolicyRecord) => {
         try { policy.onDecision?.(r); } catch { /* un observador no decide nada */ }
     };
@@ -306,7 +326,7 @@ export function createPolicyGatedSigner(
         const timeoutMs = effectiveTimeoutMs(policy, call.requirements!.maxTimeoutSeconds);
         const controller = new AbortController();
         // Un solo plazo para toda la fase previa a la firma (evaluate + currentVersion).
-        const deadline = now() + timeoutMs;
+        const deadline = readClock(context) + timeoutMs;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const TIMED_OUT = Symbol('timeout');
         const timeout = new Promise<never>((_, reject) => {
@@ -343,7 +363,7 @@ export function createPolicyGatedSigner(
                 return refuse('EXPIRED', 'ALLOW without expiresAt while requireExpiry is set', context, allow);
             }
             const checkClock = () => {
-                const t = now();
+                const t = readClock(context, allow);
                 if (t >= deadline) refuse('TIMEOUT', 'decision arrived after the deadline', context, allow);
                 if (allow.expiresAt !== undefined && t >= allow.expiresAt) refuse('EXPIRED', 'ALLOW expired before signing', context, allow);
             };
