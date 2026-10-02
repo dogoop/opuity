@@ -812,3 +812,97 @@ describe('observer runs before the final checks (what it provokes is detected)',
     });
 });
 
+describe('observer that returns a promise (never awaited, never unhandled)', () => {
+    // Antes: un onDecision async que rechazaba escapaba del try/catch y producia un
+    // unhandledRejection, que en Node 22 termina el proceso por defecto.
+    async function unhandledDuring(run: () => Promise<unknown>): Promise<unknown[]> {
+        const seen: unknown[] = [];
+        const on = (reason: unknown) => { seen.push(reason); };
+        process.on('unhandledRejection', on);
+        try {
+            await run();
+            await delay(30); // las rechazadas sin manejar se notifican tras el microtask y un tick
+            await new Promise((r) => setImmediate(r));
+        } finally { process.off('unhandledRejection', on); }
+        return seen;
+    }
+
+    test('async observer that rejects on every record: the payment signs, nothing is unhandled', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const outs: string[] = [];
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(),
+            onDecision: async (r) => { outs.push(r.outcome); throw new Error('async observer bug'); },
+        }, call());
+        let result: string = '';
+        const unhandled = await unhandledDuring(async () => { result = await outcomeOf(sign(gated)); });
+        assert.deepEqual(unhandled, []);
+        assert.equal(result, 'SIGNED');
+        assert.equal(calls.length, 1);
+        assert.deepEqual(outs, ['ALLOWED', 'SIGNED']);
+    });
+
+    test('async observer that rejects on a refusal: the refusal is unchanged, nothing is unhandled', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const refused: X402PolicyError[] = [];
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: async (ctx) => ({ decision: 'DENY', contextHash: ctx.contextHash, reason: 'no' }),
+            onDecision: () => Promise.reject(new Error('async observer bug')),
+        }, call(), (e) => refused.push(e));
+        let result: string = '';
+        const unhandled = await unhandledDuring(async () => { result = await outcomeOf(sign(gated)); });
+        assert.deepEqual(unhandled, []);
+        assert.equal(result, 'DENY');
+        assert.equal(refused.length, 1);
+        assert.equal(calls.length, 0);
+    });
+
+    test('async observer that rejects after a signer failure: the signer error still comes through', async () => {
+        const failing = { address: payer.publicKey(), signAuthEntry: async () => { throw new Error('hsm offline'); } } as any;
+        const gated = createPolicyGatedSigner(failing, { evaluate: allow(), onDecision: async () => { throw new Error('async observer bug'); } }, call());
+        let err: any;
+        const unhandled = await unhandledDuring(async () => { err = await sign(gated).catch((e) => e); });
+        assert.deepEqual(unhandled, []);
+        assert.match(err.message, /hsm offline/);
+        assert.ok(!(err instanceof X402PolicyError));
+    });
+
+    test('a thenable that rejects, and one whose then() throws: swallowed, payment unchanged', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const thenables: unknown[] = [
+            { then: (_res: unknown, rej: (e: unknown) => void) => rej(new Error('thenable rejected')) },
+            { then: () => { throw new Error('then() threw'); } },
+            { get then(): never { throw new Error('then getter threw'); } },
+        ];
+        let i = 0;
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(), onDecision: () => thenables[i++ % thenables.length] as any,
+        }, call());
+        let result: string = '';
+        const unhandled = await unhandledDuring(async () => { result = await outcomeOf(sign(gated)); });
+        assert.deepEqual(unhandled, []);
+        assert.equal(result, 'SIGNED');
+        assert.equal(calls.length, 1);
+    });
+
+    test('an observer promise that never settles does not delay or block the payment', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(), onDecision: () => new Promise(() => {}),
+        }, call());
+        const outcome = await Promise.race([outcomeOf(sign(gated)), delay(1000).then(() => 'BLOCKED')]);
+        assert.equal(outcome, 'SIGNED');
+        assert.equal(calls.length, 1);
+    });
+
+    test('a synchronous throw on every record is swallowed exactly as before', async () => {
+        const { calls, signer } = instrumentedSigner();
+        const gated = createPolicyGatedSigner(signer, {
+            evaluate: allow(), onDecision: () => { throw new Error('sync observer bug'); },
+        }, call());
+        const unhandled = await unhandledDuring(async () => { assert.equal(await outcomeOf(sign(gated)), 'SIGNED'); });
+        assert.deepEqual(unhandled, []);
+        assert.equal(calls.length, 1);
+    });
+});
+

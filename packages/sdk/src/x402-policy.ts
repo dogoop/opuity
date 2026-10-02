@@ -125,8 +125,10 @@ export interface X402PolicyHook {
     requireExpiry?: boolean;
     /**
      * Observer for receipts (see X402PolicyRecord for the sequence). Cannot
-     * change the outcome; a synchronous throw is swallowed. A callback that
-     * returns a promise is not awaited and its rejection is NOT handled here.
+     * change the outcome. A synchronous throw is swallowed. If it returns a
+     * promise (or any thenable) it is not awaited, so it cannot delay or block a
+     * payment, and its rejection is swallowed so it never becomes an
+     * unhandledRejection.
      */
     onDecision?: (record: X402PolicyRecord) => void;
     /**
@@ -316,7 +318,14 @@ export function createPolicyGatedSigner(
         return t;
     };
     const report = (r: X402PolicyRecord) => {
-        try { policy.onDecision?.(r); } catch { /* un observador no decide nada */ }
+        try {
+            const out: unknown = policy.onDecision?.(r);
+            // Un observador async que rechaza no puede tumbar el proceso con un
+            // unhandledRejection. No se espera: el signer no depende de él.
+            if (out !== null && (typeof out === 'object' || typeof out === 'function')) {
+                Promise.resolve(out).catch(() => { /* idem */ });
+            }
+        } catch { /* un observador no decide nada */ }
     };
     const refuse = (
         outcome: X402PolicyRefusal, msg: string,
