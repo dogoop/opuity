@@ -2,7 +2,7 @@
 
 Autonomous treasury and agentic-payments infrastructure for **Nirium Protocol** on Stellar/Soroban.
 
-Nirium agents rebalance USDC ↔ CETES (tokenized Mexican T-bills via Etherfuse) 24/7 without human intervention. Built for developers who want to integrate autonomous treasury management, agentic payments (x402 + MPP) — in both directions, paying for other APIs with `initX402()` and charging for your own with `x402Serve()` — and real-time market data into their applications.
+Nirium agents rebalance USDC ↔ CETES (tokenized Mexican T-bills via Etherfuse) 24/7 without human intervention. Built for developers who want to integrate autonomous treasury management, agentic payments with x402 (in both directions: paying for other APIs with `initX402()` and charging for your own with `x402Serve()`), an experimental MPP Charge client, and real-time market data into their applications.
 
 ## Install
 
@@ -61,7 +61,7 @@ agent.subscribe((signal) => {
 | Admin | `configureLLM()` |
 | WebSocket | `subscribe()`, `onLog()`, `disconnect()` |
 | x402 Payments | `initX402()`, `x402Fetch()` |
-| MPP Payments | `initMpp()`, `mppFetch()` |
+| MPP Charge client (experimental, see below) | `initMpp()`, `mppFetch()` |
 
 ## Authentication
 
@@ -93,17 +93,83 @@ const response = await agent.x402Fetch('https://nirium-agent.fly.dev/api/v1/prem
 const data = await response.json();
 ```
 
-### MPP — Session-Based Budget Delegation
+#### Per-payment cap
+
+`@x402/core` 2.23.0 and later refuse any payment above a default cap of **$1** per request (a default asset such as USDC), before anything is signed. `x402Fetch()` now says so with an `X402SpendCapError` instead of a generic error:
+
 ```typescript
-agent.initMpp({
-  secretKey: 'S...',
-  network: 'stellar:testnet',
-  mode: 'pull',
+import { X402SpendCapError } from 'nirium';
+
+try {
+  await agent.x402Fetch(url);
+} catch (e) {
+  if (e instanceof X402SpendCapError) {
+    console.log(e.formattedAmount, e.cap, e.signerCalled); // '2 USDC' '$1' false
+  }
+}
+```
+
+The error carries `url`, `amount` (atomic units, the cheapest offer when the server lists several), `formattedAmount`, `asset`, `network` and `cap`, and `signerCalled` is always `false`: nothing was signed or sent. The cap is enforced by `@x402/core` and cannot be changed from `initX402()` yet. Other `spendControls` rejections (for example a non-default asset) still surface as the original error.
+
+#### Pre-sign policy hook (experimental)
+
+Pass `policy` to `initX402()` and every `x402Fetch()` asks your policy before anything is signed. The question is asked after the Stellar authorization is built, so the policy sees exactly what would be signed: amount, destination, asset, nonce, expiration ledger and network, decoded from the bytes.
+
+**Experimental, new in 0.16.0.** The shape of `policy` (the context object, the outcomes, the records `onDecision` receives) can still change in a minor release before 1.0.0. Its scope is the agent-side cases that [#96](https://github.com/nirium-protocol/nirium/issues/96) groups as G1 (they come from the harness of @CodeDeityX), and nothing beyond them. What it does not cover is listed in the last paragraph of this section: code in the same process that holds the raw signer (L02 in that discussion), and pending-capacity reservation (L01: concurrent requests that observe the same remaining capacity). Neither is solved.
+
+```typescript
+import { X402PolicyError } from 'nirium';
+
+agent.initX402({
+  signer: walletSigner,
+  network: 'stellar:pubnet',
+  policy: {
+    evaluate: async (ctx) => {
+      const ok = BigInt(ctx.authorization.amount) <= myLimit;
+      return ok
+        ? { decision: 'ALLOW', contextHash: ctx.contextHash, policyVersion: 'v7', expiresAt: Date.now() + 2_000 }
+        : { decision: 'DENY', reason: 'over limit' };
+    },
+    // Optional: the policy version in force right now.
+    currentVersion: async () => myPolicyStore.version(),
+  },
 });
 
-const response = await agent.mppFetch('https://nirium-agent.fly.dev/api/v1/mpp/signals');
-const data = await response.json();
+try {
+  await agent.x402Fetch(url);
+} catch (e) {
+  if (e instanceof X402PolicyError) console.log(e.outcome); // DENY, WAIT, TIMEOUT, STALE, ...
+}
 ```
+
+Only an `ALLOW` that echoes this authorization's `contextHash`, and is still valid, reaches the signer. Everything else signs nothing: `DENY`, `WAIT`, an exception, no answer before the deadline (`timeoutMs`, default 5 s, never more than half the payment's `maxTimeoutSeconds`), a malformed answer, an `ALLOW` past its `expiresAt`, a signer whose address changed while the policy was being asked, or a clock (`now`) that does not return a finite number (`CLOCK_INVALID`). Without `policy`, `x402Fetch()` behaves exactly as before.
+
+**Stale ALLOW.** With `currentVersion` set, it is read after the `ALLOW` and right before signing, and the `ALLOW` signs only if its `policyVersion` matches. A rejected, empty or late read signs nothing. This check is **not atomic with signing**: the version can change after it is read, or while the signer runs. It narrows the window to the synchronous step between the read and the signer call; it does not close it. `expiresAt` is checked again after the read.
+
+**Receipts (`onDecision`).** A payment whose `ALLOW` is accepted produces an `ALLOWED` record. `ALLOWED` does **not** mean every check has passed: it is a notice, sent before the policy-version read and the final clock and identity checks. What follows it is either a refusal from those checks (`STALE`, `EXPIRED`, `TIMEOUT`, `CLOCK_INVALID`, `SIGNER_CHANGED`, ...) or the signer's result: `SIGNED` (the signer returned a signature) or `SIGNER_ERROR` (it rejected, threw, or returned no `signedAuthEntry`; its own error is rethrown untouched). `SIGNED` therefore means a signature exists. The observer cannot change the outcome. A synchronous throw from it is swallowed. If it returns a promise (or any thenable), that is not awaited, so it cannot delay a payment, and its rejection is swallowed so it never becomes an unhandled rejection. It runs before the final clock and identity checks, so what it changes there is detected.
+
+**Rejected before the policy is consulted.** An authorization that is not a single `transfer(from, to, amount)` matching the selected payment requirements (asset, destination, amount, network, no sub-invocations, `from` equal to the signer) is refused without calling `evaluate`. A CAP-71 preimage must be bound to the signer's own address.
+
+**Signature check.** The hook only checks that the signer returned a non-empty `signedAuthEntry`; it does not verify the signature itself. That check comes from `@stellar/stellar-sdk`: `authorizeEntry` verifies the signature against sha256 of the preimage before it enters the transaction (verified in 16.3.0, the version this package requires). A signature over different bytes, or by a different key, never reaches the merchant; a test in this package pins that.
+
+**What this does not do.** It is a check on the agent side, not account-level enforcement: code in the same process that holds the raw signer can still call it directly (the L02 limit in #96; so can code that replaces its `signAuthEntry`, which is looked up at call time), and nothing on-chain enforces the policy. It does not solve pending-capacity reservation (L01 in #96: concurrent requests that observe the same remaining capacity): two calls evaluated at the same time can each fit a limit that together they exceed, and an aggregate cap has to be held by your policy. Discussed in [#96](https://github.com/nirium-protocol/nirium/issues/96), where @CodeDeityX laid out the agent-side cases this hook is built against.
+
+### MPP Charge (experimental)
+
+```typescript
+agent.initMpp({ secretKey: 'S...', mode: 'pull' }); // 'pull' (default) or 'push'
+
+const response = await agent.mppFetch('https://your-mpp-server.example/resource');
+```
+
+`initMpp()` builds an MPP Charge client: the server answers `402` with a challenge, the client signs a USDC transfer on Stellar, and the server verifies and settles it. The network comes from the server's challenge, so `network` in the config is accepted but unused.
+
+**Do not use it in production, and do not point it at Nirium's hosted endpoints yet.**
+
+- The client works against a compliant MPP Charge server. We checked it against Nirium's own MPP middleware running locally against testnet, in `pull` and in `push` mode.
+- When we tested on 1 October 2026, Nirium's hosted **testnet** endpoint (`/api/v1/mpp/*`) rejected MPP payments with `402 Verification Failed`, in `pull` and in `push` mode. We have **not tested the mainnet endpoint** (it would spend real USDC), so we cannot tell you it works there. We have not found the cause yet.
+- In `push` mode the payment settles on-chain before the server verifies it, so a request the server rejects is **not refunded**.
+- Until this is diagnosed, use x402 (`initX402()`) for paid endpoints. The `get_mpp_*` tools of the MCP server have the same limitation.
 
 ### x402Serve() — Charging Your Own API
 
@@ -135,7 +201,7 @@ Runs on **your own server**, not Nirium's — `x402Serve()` is a client-side fun
 | **Protected** (API key) | `execute`, `market`, `loop/start\|stop\|scan`, `subscriptions`, `skills/install`, `webhooks` |
 | **WebSocket** (JWT) | `/ws/signals` — real-time signal stream |
 | **x402 Premium** | `/api/v1/premium/signals` ($0.02 USDC), `/api/v1/premium/market` ($0.05 USDC) |
-| **MPP** | `/api/v1/mpp/signals`, `/api/v1/mpp/market` |
+| **MPP Charge** | `/api/v1/mpp/signals`, `/api/v1/mpp/market` (testnet endpoint rejected MPP payments when tested, mainnet untested, see [MPP Charge](#mpp-charge-experimental)) |
 
 ### x402 Metrics — Observability Wrapper
 
@@ -272,7 +338,7 @@ Anchor a **hash** rather than the data itself: IPFS content cannot be deleted, s
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 22.12.0. `@stellar/stellar-sdk` 16 and `@x402/stellar` 2.28 declare `>=22.0.0`, but stellar-sdk 16 depends on `@noble/hashes` 2.x, which is ESM-only, and this package is published as CommonJS: `require('nirium')` only works without a flag from Node 22.12.0 (on 22.11 it throws `ERR_REQUIRE_ESM`)
 - TypeScript >= 5.0
 
 ## Links

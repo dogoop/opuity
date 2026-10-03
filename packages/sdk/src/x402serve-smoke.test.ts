@@ -22,8 +22,16 @@ jest.mock('@x402/stellar', () => ({
 jest.mock('@x402/stellar/exact/client', () => ({
   ExactStellarScheme: class {},
 }));
-jest.mock('mppx', () => ({
-  default: { create: () => ({}) },
+jest.mock('mppx/client', () => ({
+  Mppx: { create: () => ({ fetch: async () => new Response('{}') }) },
+}));
+jest.mock('@stellar/mpp/charge/client', () => ({
+  stellar: { charge: () => ({}) },
+}));
+// stellar-sdk 16 loads ESM-only @noble/hashes; index.ts pulls it in through
+// x402-policy.ts. Only the constants read at module load are needed here.
+jest.mock('@stellar/stellar-sdk', () => ({
+  Networks: { TESTNET: 'Test SDF Network ; September 2015', PUBLIC: 'Public Global Stellar Network ; September 2015' },
 }));
 
 import { x402Serve } from './index';
