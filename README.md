@@ -132,6 +132,20 @@ Contributions welcome: examples, framework adapters, language bindings, docs and
 
 Outside of any campaign, PRs are still welcome — examples, framework adapters, bindings, docs, tests — just note in the PR that it isn't tied to a bounty.
 
+## Security
+
+Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
+
+**Known transitive issue (checked 2026-10-04):** `@stellar/stellar-sdk` 16.x pins `axios` to exactly `1.18.0`, which has seven high-severity advisories fixed in `1.20.0`. `nirium` and `@x402/stellar` both depend on stellar-sdk 16, so a plain install pulls that axios. Until a 16.x patch ships, force the fixed version from your own `package.json`:
+
+```json
+{
+  "overrides": { "axios": "^1.20.0" }
+}
+```
+
+With pnpm, put the same entry under `"pnpm": { "overrides": { ... } }`. We tested this on a clean install of `nirium@0.16.0`: axios resolves to 1.20.0, `npm audit` reports no high findings, and Horizon calls through the SDK still work.
+
 ## Disclaimer
 
 Experimental software. Not financial advice, not an investment product, and no guarantee of yield, dividends or appreciation. Rate data (Blend supply rate, Etherfuse CETES rate) is public protocol information, not a projection. Smart contracts carry risk even when audited. XLM and Stellar assets are volatile.
