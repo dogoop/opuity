@@ -34,7 +34,7 @@ or RouteDock's own real code/config, not guessed:
 | --- | --- |
 | `pricing.x402.facilitator` | `X402_FACILITATORS` in `packages/sdk/src/index.ts` (`x402Serve()`'s own default) |
 | `asset_contract` | `USDC_TESTNET_ADDRESS` / `USDC_PUBNET_ADDRESS` exported by `@x402/stellar` — the same library `x402Serve()` loads at runtime |
-| `endpoints.signals.path`, `pricing.x402.amount` | `examples/nextjs-x402/app/api/premium/signals/route.ts` (`$0.02`, `/api/v1/premium/signals`) — confirmed live: a probe of `GET https://nirium-agent.fly.dev/api/v1/premium/signals` returns a real `402` whose `payment-required` header decodes to `amount: "200000"` (0.02 USDC, 7dp) on the exact same asset contract above |
+| `endpoints.signals.path`, `pricing.x402.amount` | [`opuity-frontend`](https://github.com/snooopdog/opuity-frontend) `app/api/premium/signals/route.ts` (`$0.02`, `/api/v1/premium/signals`) — confirmed live: a probe of `GET https://nirium-agent.fly.dev/api/v1/premium/signals` returns a real `402` whose `payment-required` header decodes to `amount: "200000"` (0.02 USDC, 7dp) on the exact same asset contract above |
 | `payee` | `x402Serve()`'s `payTo` config — read from `NIRIUM_ROUTEDOCK_PAYEE_SECRET` at startup, never hardcoded |
 
 ## Setup
