@@ -1,23 +1,29 @@
-# Nirium
+# Opuity
 
 Open-source autonomous treasury and agentic payments (x402/MPP) for Stellar/Soroban.
 
-This repository contains the TypeScript and Python SDKs, the MCP server, the CLI, examples and quickstarts that let any developer:
+This repository (formerly *Nirium*) contains the TypeScript and Python SDKs, the MCP server, the CLI, examples and quickstarts that let any developer:
 
 - **Get paid by AI agents**: put your own API behind an x402 pay-gate in one call with `x402Serve()`, or pay for someone else's with `initX402()`.
-- **Automate on-chain treasury**: a Nirium agent moves idle capital into a CETES strategy (tokenized Mexican T-bills via Etherfuse) and back, over a vault **you** own. The agent can propose a rebalance without ever holding a signing key; autonomous execution on mainnet (the agent signs) is invite-only while a legal review closes.
+- **Automate on-chain treasury**: an Opuity agent moves idle capital into a CETES strategy (tokenized Mexican T-bills via Etherfuse) and back, over a vault **you** own. The agent can propose a rebalance without ever holding a signing key; autonomous execution on mainnet (the agent signs) is invite-only while a legal review closes.
 - **Anchor immutable audit trails**: SHA-256 content hash pinned to IPFS, optionally carrying an ed25519 signature that proves *who* declared the fact, not just that it is unaltered.
 
-Software-only and non-custodial: regulated partners execute settlement, the client signs every fund movement, and Nirium never holds client funds.
+Software-only and non-custodial: regulated partners execute settlement, the client signs every fund movement, and Opuity never holds client funds.
+
+> **Split repositories.** This codebase is now two standalone repositories, both of which inherit the complete Git history of the original project:
+> - **`opuity`** (this repo) — SDKs, MCP server, CLI, docs, examples and quickstarts.
+> - **[`opuity-frontend`](https://github.com/snooopdog/opuity-frontend)** — the Next.js x402 pay-gated App Router example, kept runnable on its own (`npm install && npm run dev`).
 
 ## Packages
 
+Package identifiers on npm/PyPI are unchanged by the rename — install them exactly as before.
+
 | Package | Install | Version | Description |
 |---|---|---|---|
-| TypeScript SDK | `npm install nirium` | [![npm](https://img.shields.io/npm/v/nirium)](https://www.npmjs.com/package/nirium) | Client for the Nirium API, x402/MPP payments, signals, webhooks, plus `x402Serve()` to charge for your own API. |
+| TypeScript SDK | `npm install nirium` | [![npm](https://img.shields.io/npm/v/nirium)](https://www.npmjs.com/package/nirium) | Client for the Opuity API, x402/MPP payments, signals, webhooks, plus `x402Serve()` to charge for your own API. |
 | Python SDK | `pip install nirium` · `pip install 'nirium[langchain]'` | [![PyPI](https://img.shields.io/pypi/v/nirium)](https://pypi.org/project/nirium/) | Async client with the same surface, plus `NiriumX402Tool` for LangChain agents. |
 | MCP server | `npx nirium-mcp` | [![npm](https://img.shields.io/npm/v/nirium-mcp)](https://www.npmjs.com/package/nirium-mcp) | 25 tools for Claude Desktop, Cursor, and any MCP-compatible IDE. |
-| CLI | `npm install -g nirium-cli` | [![npm](https://img.shields.io/npm/v/nirium-cli)](https://www.npmjs.com/package/nirium-cli) | Scaffold and interact with Nirium from the terminal. |
+| CLI | `npm install -g nirium-cli` | [![npm](https://img.shields.io/npm/v/nirium-cli)](https://www.npmjs.com/package/nirium-cli) | Scaffold and interact with Opuity from the terminal. |
 
 > The source in `packages/` matches what is published. The two SDKs share full Treasury parity (12 methods, `proposeTreasuryRebalance()`/`propose_treasury_rebalance()` included). `x402Serve()` stays TypeScript-only — it's Express middleware, server-side Node, with no meaningful equivalent in an async Python client. Going the other way, Python ships a resilient, auto-reconnecting WebSocket client (backoff, jitter, dedup) and a LangChain `BaseTool` (`pip install nirium[langchain]`) that TypeScript doesn't have yet — the version gap runs both directions, not just one.
 
@@ -58,13 +64,13 @@ Any AI agent can now pay for your endpoint in USDC: no account, no card, no subs
 > [issue #91](https://github.com/nirium-protocol/nirium/issues/91) for what's
 > missing and why, and for a real production reference implementation).
 
-See [`docs/`](./docs) for full quickstarts, including [**"Charge AI agents in 5 minutes"**](./docs/quickstart-x402.md), and [`examples/`](./examples) for 12 runnable integrations across 4 languages: [Express](./examples/express-x402) and [Next.js](./examples/nextjs-x402) (TypeScript), [Go](./examples/go-x402), [Rust](./examples/rust-x402), [LangChain x402](./examples/langchain-x402-agent), [non-custodial treasury vault](./examples/treasury-vault-quickstart), [resilient WebSocket signals](./examples/ws-signals-resilient), [one-click Vercel deploy](./examples/deploy-x402-vercel), [Unity/C# game paywall](./examples/unity-game-x402-gate), [RouteDock discovery manifest](./examples/routedock-manifest), [Stellar Disbursement Platform audit bridge](./examples/sdp-audit-bridge), and [audit-forensic-bridge](./examples/audit-forensic-bridge). For real production findings (not marketing copy), see the [**devlog**](./docs/devlog.md).
+See [`docs/`](./docs) for full quickstarts, including [**"Charge AI agents in 5 minutes"**](./docs/quickstart-x402.md), and [`examples/`](./examples) for runnable integrations across 4 languages: [Express](./examples/express-x402) (TypeScript), [Go](./examples/go-x402), [Rust](./examples/rust-x402), [LangChain x402](./examples/langchain-x402-agent), [non-custodial treasury vault](./examples/treasury-vault-quickstart), [resilient WebSocket signals](./examples/ws-signals-resilient), [one-click Vercel deploy](./examples/deploy-x402-vercel), [Unity/C# game paywall](./examples/unity-game-x402-gate), [RouteDock discovery manifest](./examples/routedock-manifest), [Stellar Disbursement Platform audit bridge](./examples/sdp-audit-bridge), and [audit-forensic-bridge](./examples/audit-forensic-bridge). The Next.js App Router paywall lives in its own repository: [`opuity-frontend`](https://github.com/snooopdog/opuity-frontend). For real production findings (not marketing copy), see the [**devlog**](./docs/devlog.md).
 
 ## Networks
 
 Live on **both** Stellar networks. They are not two copies of the same thing.
 
-> **Settlement note (proposal, not a demand):** because nirium already speaks
+> **Settlement note (proposal, not a demand):** because Opuity already speaks
 > x402 (`x402Serve()`/`initX402()`), the same exact-scheme flow can also
 > settle **fee-free in Nano (XNO)** — instant finality, no gas, fully
 > self-custodied (no freezeable stablecoin). At agent micropayment prices the
@@ -87,7 +93,7 @@ Live on **both** Stellar networks. They are not two copies of the same thing.
 | Autonomous invest (**the agent signs**) | [`82d73f53…6b3d4`](https://stellar.expert/explorer/public/tx/82d73f537e907140367f9343f63a36704c74a5286aced7a938cee8fffb56b3d4) |
 | API | [`nirium-agent-mainnet.fly.dev/health`](https://nirium-agent-mainnet.fly.dev/health) |
 
-That third transaction is the point: the agent moved funds it does not own, and the contract gave it no way to take them out. Nirium holds only the vault's `RebalanceManager` role, and `rebalance()` accepts no destination address: withdrawal is not *forbidden*, it is **inexpressible**.
+That third transaction is the point: the agent moved funds it does not own, and the contract gave it no way to take them out. Opuity holds only the vault's `RebalanceManager` role, and `rebalance()` accepts no destination address: withdrawal is not *forbidden*, it is **inexpressible**.
 
 **Testnet** (no real value, where the loop and the key live, and where you should build).
 
@@ -98,7 +104,7 @@ That third transaction is the point: the agent moved funds it does not own, and 
 
 API: [`nirium-agent.fly.dev/health`](https://nirium-agent.fly.dev/health) · node catalog: [`/api/nodes`](https://nirium-agent.fly.dev/api/nodes)
 
-Nirium's own **NiriumVault** treasury contract stays on testnet and is audit-gated: no independent third-party audit has happened yet, and no client funds ever reach it. The mainnet treasury path runs over a **DeFindex** vault instead: a third-party contract audited by OtterSec (March 2025, 16 findings, all 13 vulnerabilities resolved) on a Blend V2 strategy.
+The **NiriumVault** treasury contract (on-chain names are unchanged) stays on testnet and is audit-gated: no independent third-party audit has happened yet, and no client funds ever reach it. The mainnet treasury path runs over a **DeFindex** vault instead: a third-party contract audited by OtterSec (March 2025, 16 findings, all 13 vulnerabilities resolved) on a Blend V2 strategy.
 
 ## External validation
 
@@ -124,11 +130,11 @@ Full history, including findings still open, in the [devlog](./docs/devlog.md).
 
 ## Funding
 
-Nirium received Stellar Community Fund Instaward funding (two awards) via a regional Stellar Ambassador chapter, with full KYC complete (Airtable + Persona + W-8BEN). Instaward is SCF's early-stage program for prototyping and local validation, up to $15,000 per project. More info: [communityfund.stellar.org](https://communityfund.stellar.org). This isn't independently verifiable by API the way the findings above are — it's the program's own award record, not a third-party confirmation.
+Opuity (formerly Nirium) received Stellar Community Fund Instaward funding (two awards) via a regional Stellar Ambassador chapter, with full KYC complete (Airtable + Persona + W-8BEN). Instaward is SCF's early-stage program for prototyping and local validation, up to $15,000 per project. More info: [communityfund.stellar.org](https://communityfund.stellar.org). This isn't independently verifiable by API the way the findings above are — it's the program's own award record, not a third-party confirmation.
 
 ## Contributing
 
-Contributions welcome: examples, framework adapters, language bindings, docs and tests. This repo ran a GrantFox bounty campaign with Trustless Work through early September 2026 — that campaign is now closed, so there are currently **no open, assigned-on-request issues**. Watch the [issues page](../../issues) for the next round rather than pinging an old thread; a future campaign, if one runs, will be labeled explicitly.
+Contributions welcome: examples, framework adapters, language bindings, docs and tests. This project ran a GrantFox bounty campaign with Trustless Work through early September 2026 — that campaign is now closed, so there are currently **no open, assigned-on-request issues**. Watch the [issues page](https://github.com/snooopdog/opuity/issues) for the next round rather than pinging an old thread; a future campaign, if one runs, will be labeled explicitly.
 
 Outside of any campaign, PRs are still welcome — examples, framework adapters, bindings, docs, tests — just note in the PR that it isn't tied to a bounty.
 
